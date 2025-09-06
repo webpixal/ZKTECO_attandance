@@ -9,8 +9,8 @@ const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-const EXPRESS_PORT = process.env.EXPRESS_PORT || 3000;
-let DEVICE_IP = process.env.DEVICE_IP || '192.168.1.201';
+const EXPRESS_PORT = process.env.EXPRESS_PORT || 5500;
+let DEVICE_IP = process.env.DEVICE_IP || '192.168.159.201';
 const DEVICE_PORT = process.env.DEVICE_PORT || 4370;
 
 let deviceInstance;
@@ -52,20 +52,34 @@ app.get('/api/device-info', async (req, res) => {
     return res.status(503).json({ error: 'Device not connected' });
   }
   try {
+    // Get basic device info
+    const basicInfo = await deviceInstance.getInfo();
+    
+    // Try to get additional device information
+    let extendedInfo = {};
+    try {
+      extendedInfo = {
+        deviceName: await deviceInstance.getDeviceName(),
+        platform: await deviceInstance.getPlatform(),
+        firmwareVersion: await deviceInstance.getDeviceVersion(),
+        macAddress: await deviceInstance.getMacAddress(),
+        vendor: await deviceInstance.getVendor(),
+        productTime: await deviceInstance.getProductTime(),
+        attendanceSize: await deviceInstance.getAttendanceSize(),
+        faceOn: await deviceInstance.getFaceOn(),
+        ssr: await deviceInstance.getSSR(),
+        pin: await deviceInstance.getPIN(),
+        deviceTime: await deviceInstance.getTime()
+      };
+    } catch (error) {
+      console.warn('Some device info methods not available:', error.message);
+      // Continue with basic info only
+    }
+    
+    // Combine basic and extended info
     const info = {
-      deviceName: await deviceInstance.getDeviceName(),
-      platform: await deviceInstance.getPlatform(),
-      firmwareVersion: await deviceInstance.getDeviceVersion(),
-      macAddress: await deviceInstance.getMacAddress(),
-      vendor: await deviceInstance.getVendor(),
-      productTime: await deviceInstance.getProductTime(),
-      logCapacity: deviceInfo.logCapacity,
-      userCount: deviceInfo.userCount,
-      attendanceSize: await deviceInstance.getAttendanceSize(),
-      faceOn: await deviceInstance.getFaceOn(),
-      ssr: await deviceInstance.getSSR(),
-      pin: await deviceInstance.getPIN(),
-      deviceTime: await deviceInstance.getTime()
+      ...basicInfo,
+      ...extendedInfo
     };
     
     res.status(200).json(info);
