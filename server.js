@@ -9,7 +9,7 @@ const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-const EXPRESS_PORT = process.env.EXPRESS_PORT || 5500;
+const EXPRESS_PORT = process.env.EXPRESS_PORT || 3000;
 let DEVICE_IP = process.env.DEVICE_IP || '192.168.1.201';
 const DEVICE_PORT = process.env.DEVICE_PORT || 4370;
 
@@ -46,139 +46,207 @@ app.get('/api/device-ip', (req, res) => {
   res.status(200).json({ ip: DEVICE_IP });
 });
 
-// API Routes
+// API to get device information
 app.get('/api/device-info', async (req, res) => {
   if (!deviceInstance) {
     return res.status(503).json({ error: 'Device not connected' });
   }
   try {
-    res.status(200).json(deviceInfo);
+    const info = {
+      deviceName: await deviceInstance.getDeviceName(),
+      platform: await deviceInstance.getPlatform(),
+      firmwareVersion: await deviceInstance.getDeviceVersion(),
+      macAddress: await deviceInstance.getMacAddress(),
+      vendor: await deviceInstance.getVendor(),
+      productTime: await deviceInstance.getProductTime(),
+      logCapacity: deviceInfo.logCapacity,
+      userCount: deviceInfo.userCount,
+      attendanceSize: await deviceInstance.getAttendanceSize(),
+      faceOn: await deviceInstance.getFaceOn(),
+      ssr: await deviceInstance.getSSR(),
+      pin: await deviceInstance.getPIN(),
+      deviceTime: await deviceInstance.getTime()
+    };
+    
+    res.status(200).json(info);
   } catch (error) {
     console.error('Error fetching device info:', error);
     res.status(500).json({ error: 'Failed to fetch device information' });
   }
 });
 
+// API to get all users
 app.get('/api/users', async (req, res) => {
   if (!deviceInstance) {
     return res.status(503).json({ error: 'Device not connected' });
   }
   try {
-    res.status(200).json(usersCache);
+    const users = await deviceInstance.getUsers();
+    usersCache = users;
+    res.status(200).json(users);
   } catch (error) {
     console.error('Error fetching users:', error);
     res.status(500).json({ error: 'Failed to fetch users from device' });
   }
 });
 
+// API to add a new user
 app.post('/api/users', async (req, res) => {
   if (!deviceInstance) {
     return res.status(503).json({ error: 'Device not connected' });
   }
   try {
-    const { userId, name, cardNumber, role, password } = req.body;
+    const { uid, userid, name, password, role, cardno } = req.body;
     
-    // Create user object
-    const user = {
-      uid: parseInt(userId),
-      name: name,
-      cardno: cardNumber || 0,
-      role: role || 0,
-      password: password || ""
-    };
-    
-    // Add user to device
-    const result = await deviceInstance.setUser(user);
+    // Add user to device using the correct method signature
+    const result = await deviceInstance.setUser(uid, userid, name, password, role || 0, cardno || 0);
     console.log('User added:', result);
     
     // Refresh users cache
     usersCache = await deviceInstance.getUsers();
     
-    res.status(201).json({ message: 'User added successfully', user: user });
+    res.status(201).json({ message: 'User added successfully', result });
   } catch (error) {
     console.error('Error adding user:', error);
     res.status(500).json({ error: 'Failed to add user to device' });
   }
 });
 
-app.put('/api/users/:userId', async (req, res) => {
+// API to update a user
+app.put('/api/users/:uid', async (req, res) => {
   if (!deviceInstance) {
     return res.status(503).json({ error: 'Device not connected' });
   }
   try {
-    const userId = parseInt(req.params.userId);
-    const { name, cardNumber, role, password } = req.body;
-    
-    // Find the user
-    const user = usersCache.find(u => u.uid === userId);
-    
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    
-    // Update user properties
-    if (name) user.name = name;
-    if (cardNumber) user.cardno = cardNumber;
-    if (role) user.role = role;
-    if (password) user.password = password;
+    const uid = parseInt(req.params.uid);
+    const { userid, name, password, role, cardno } = req.body;
     
     // Update user on device
-    const result = await deviceInstance.setUser(user);
+    const result = await deviceInstance.setUser(uid, userid, name, password, role || 0, cardno || 0);
     console.log('User updated:', result);
     
     // Refresh users cache
     usersCache = await deviceInstance.getUsers();
     
-    res.status(200).json({ message: 'User updated successfully', user: user });
+    res.status(200).json({ message: 'User updated successfully', result });
   } catch (error) {
     console.error('Error updating user:', error);
     res.status(500).json({ error: 'Failed to update user on device' });
   }
 });
 
-app.delete('/api/users/:userId', async (req, res) => {
+// API to delete a user
+app.delete('/api/users/:uid', async (req, res) => {
   if (!deviceInstance) {
     return res.status(503).json({ error: 'Device not connected' });
   }
   try {
-    const userId = parseInt(req.params.userId);
+    const uid = parseInt(req.params.uid);
     
     // Delete user from device
-    const result = await deviceInstance.deleteUser(userId);
+    const result = await deviceInstance.deleteUser(uid);
     console.log('User deleted:', result);
     
     // Refresh users cache
     usersCache = await deviceInstance.getUsers();
     
-    res.status(200).json({ message: 'User deleted successfully' });
+    res.status(200).json({ message: 'User deleted successfully', result });
   } catch (error) {
     console.error('Error deleting user:', error);
     res.status(500).json({ error: 'Failed to delete user from device' });
   }
 });
 
+// API to get attendance logs
 app.get('/api/attendance', async (req, res) => {
+  if (!deviceInstance) {
+    return res.status(503).json({ error: 'Device not connected' });
+  }
   try {
-    res.status(200).json(attendanceHistory);
+    const attendance = await deviceInstance.getAttendances();
+    attendanceHistory = attendance;
+    res.status(200).json(attendance);
   } catch (error) {
     console.error('Error fetching attendance:', error);
-    res.status(500).json({ error: 'Failed to fetch attendance data' });
+    res.status(500).json({ error: 'Failed to fetch attendance from device' });
   }
 });
 
-// Clear attendance data
+// API to clear attendance logs
 app.delete('/api/attendance', async (req, res) => {
+  if (!deviceInstance) {
+    return res.status(503).json({ error: 'Device not connected' });
+  }
   try {
-    if (deviceInstance) {
-      await deviceInstance.clearAttendanceLog();
-      attendanceHistory = [];
-      res.status(200).json({ message: 'Attendance data cleared successfully' });
-    } else {
-      res.status(503).json({ error: 'Device not connected' });
-    }
+    const result = await deviceInstance.clearAttendanceLog();
+    attendanceHistory = [];
+    res.status(200).json({ message: 'Attendance logs cleared successfully', result });
   } catch (error) {
     console.error('Error clearing attendance:', error);
-    res.status(500).json({ error: 'Failed to clear attendance data' });
+    res.status(500).json({ error: 'Failed to clear attendance logs' });
+  }
+});
+
+// API to get device time
+app.get('/api/device-time', async (req, res) => {
+  if (!deviceInstance) {
+    return res.status(503).json({ error: 'Device not connected' });
+  }
+  try {
+    const time = await deviceInstance.getTime();
+    res.status(200).json({ deviceTime: time });
+  } catch (error) {
+    console.error('Error fetching device time:', error);
+    res.status(500).json({ error: 'Failed to fetch device time' });
+  }
+});
+
+// API to set device time
+app.post('/api/device-time', async (req, res) => {
+  if (!deviceInstance) {
+    return res.status(503).json({ error: 'Device not connected' });
+  }
+  try {
+    const { dateTime } = req.body;
+    if (!dateTime) {
+      return res.status(400).json({ error: 'DateTime is required' });
+    }
+    
+    const result = await deviceInstance.setTime(new Date(dateTime));
+    res.status(200).json({ message: 'Device time updated successfully', result });
+  } catch (error) {
+    console.error('Error setting device time:', error);
+    res.status(500).json({ error: 'Failed to set device time' });
+  }
+});
+
+// API to run voice test
+app.post('/api/voice-test', async (req, res) => {
+  if (!deviceInstance) {
+    return res.status(503).json({ error: 'Device not connected' });
+  }
+  try {
+    const result = await deviceInstance.voiceTest();
+    res.status(200).json({ message: 'Voice test executed', result });
+  } catch (error) {
+    console.error('Error running voice test:', error);
+    res.status(500).json({ error: 'Failed to run voice test' });
+  }
+});
+
+// API to clear all data
+app.delete('/api/clear-data', async (req, res) => {
+  if (!deviceInstance) {
+    return res.status(503).json({ error: 'Device not connected' });
+  }
+  try {
+    const result = await deviceInstance.clearData();
+    usersCache = [];
+    attendanceHistory = [];
+    res.status(200).json({ message: 'All data cleared from device', result });
+  } catch (error) {
+    console.error('Error clearing device data:', error);
+    res.status(500).json({ error: 'Failed to clear device data' });
   }
 });
 
@@ -255,6 +323,10 @@ async function initializeDevice() {
     usersCache = await deviceInstance.getUsers();
     console.log('Total users on device:', usersCache.length);
 
+    // Get attendance logs
+    attendanceHistory = await deviceInstance.getAttendances();
+    console.log('Total attendance records:', attendanceHistory.length);
+
     // Set up real-time attendance monitoring
     await deviceInstance.getRealTimeLogs((realTimeLog) => {
       processAndBroadcastAttendance(realTimeLog);
@@ -266,6 +338,7 @@ async function initializeDevice() {
     io.emit('device_connected', true);
     io.emit('device_info', deviceInfo);
     io.emit('users_data', usersCache);
+    io.emit('attendance_history', attendanceHistory);
 
   } catch (error) {
     console.error('Failed to connect to device:', error);
@@ -282,4 +355,13 @@ async function initializeDevice() {
 server.listen(EXPRESS_PORT, () => {
   console.log(`Server running on port ${EXPRESS_PORT}`);
   initializeDevice();
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('Shutting down server...');
+  if (deviceInstance) {
+    await deviceInstance.disconnect();
+  }
+  process.exit(0);
 });
