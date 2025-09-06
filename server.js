@@ -10,8 +10,8 @@ const io = new Server(server, {
 });
 
 const EXPRESS_PORT = process.env.EXPRESS_PORT || 5500;
-const DEVICE_IP = '192.168.159.201';
-const DEVICE_PORT = 4370;
+let DEVICE_IP = process.env.DEVICE_IP || '192.168.1.201';
+const DEVICE_PORT = process.env.DEVICE_PORT || 4370;
 
 let deviceInstance;
 let usersCache = [];
@@ -21,6 +21,30 @@ let deviceInfo = {};
 // Middleware
 app.use(express.json());
 app.use(express.static('public'));
+
+// API to update device IP
+app.post('/api/device-ip', (req, res) => {
+  const { ip } = req.body;
+  if (!ip) {
+    return res.status(400).json({ error: 'IP address is required' });
+  }
+  
+  DEVICE_IP = ip;
+  console.log(`Device IP updated to: ${DEVICE_IP}`);
+  
+  // Reinitialize device connection with new IP
+  if (deviceInstance) {
+    deviceInstance.disconnect();
+  }
+  initializeDevice();
+  
+  res.status(200).json({ message: 'Device IP updated successfully', ip: DEVICE_IP });
+});
+
+// API to get current device IP
+app.get('/api/device-ip', (req, res) => {
+  res.status(200).json({ ip: DEVICE_IP });
+});
 
 // API Routes
 app.get('/api/device-info', async (req, res) => {
@@ -142,12 +166,29 @@ app.get('/api/attendance', async (req, res) => {
   }
 });
 
+// Clear attendance data
+app.delete('/api/attendance', async (req, res) => {
+  try {
+    if (deviceInstance) {
+      await deviceInstance.clearAttendanceLog();
+      attendanceHistory = [];
+      res.status(200).json({ message: 'Attendance data cleared successfully' });
+    } else {
+      res.status(503).json({ error: 'Device not connected' });
+    }
+  } catch (error) {
+    console.error('Error clearing attendance:', error);
+    res.status(500).json({ error: 'Failed to clear attendance data' });
+  }
+});
+
 // Socket.IO for real-time updates
 io.on('connection', (socket) => {
   console.log('A web client connected');
   socket.emit('users_data', usersCache);
   socket.emit('attendance_history', attendanceHistory);
   socket.emit('device_info', deviceInfo);
+  socket.emit('device_ip', DEVICE_IP);
 });
 
 // Process and broadcast attendance data
@@ -220,12 +261,19 @@ async function initializeDevice() {
     });
 
     console.log('Listening for real-time attendance data...');
+    
+    // Update all connected clients
+    io.emit('device_connected', true);
+    io.emit('device_info', deviceInfo);
+    io.emit('users_data', usersCache);
 
   } catch (error) {
     console.error('Failed to connect to device:', error);
     if (deviceInstance) {
       deviceInstance.disconnect();
     }
+    io.emit('device_connected', false);
+    // Attempt to reconnect after a delay
     setTimeout(initializeDevice, 5000);
   }
 }
