@@ -3,19 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ZKTeco Device Management</title>
-    <script src="/socket.io/socket.io.js"></script>
+    <title>ZKTeco Real-Time Attendance</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        :root {
-            --primary-color: #3498db;
-            --secondary-color: #2c3e50;
-            --success-color: #27ae60;
-            --warning-color: #e67e22;
-            --danger-color: #e74c3c;
-            --light-color: #ecf0f1;
-            --dark-color: #34495e;
-        }
-        
         * {
             margin: 0;
             padding: 0;
@@ -30,265 +20,252 @@
         }
         
         .container {
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
-            width: 100%;
             max-width: 1200px;
             margin: 0 auto;
-            overflow: hidden;
         }
         
         header {
-            background: var(--secondary-color);
-            color: white;
-            padding: 20px;
-            text-align: center;
-        }
-        
-        .status-bar {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 15px 20px;
-            background: var(--light-color);
-            border-bottom: 1px solid #ddd;
+            padding: 20px;
+            background: #2c3e50;
+            color: white;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
         }
         
-        .connection-status {
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .logo i {
+            font-size: 2.5rem;
+        }
+        
+        .logo h1 {
+            font-size: 1.8rem;
+        }
+        
+        .status {
             display: flex;
             align-items: center;
             gap: 10px;
+            background: #34495e;
+            padding: 10px 20px;
+            border-radius: 30px;
         }
         
         .status-indicator {
             width: 12px;
             height: 12px;
             border-radius: 50%;
-            background: var(--danger-color);
+            background: #2ecc71;
+            animation: pulse 1.5s infinite;
         }
         
-        .status-indicator.connected {
-            background: var(--success-color);
+        .status-disconnected {
+            background: #e74c3c;
         }
         
-        .content {
-            padding: 30px;
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .dashboard {
             display: grid;
-            grid-template-columns: 1fr 2fr;
+            grid-template-columns: 1fr 350px;
             gap: 20px;
         }
         
-        .sidebar {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-        
-        .card {
+        .attendance-list {
             background: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
             padding: 20px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            max-height: 600px;
+            overflow-y: auto;
         }
         
-        .card-header {
+        .attendance-list h2 {
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #f1f1f1;
+            color: #2c3e50;
+        }
+        
+        .attendance-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 20px;
-            padding-bottom: 15px;
-            border-bottom: 1px solid #eee;
+            padding: 15px;
+            border-bottom: 1px solid #f1f1f1;
+            transition: background 0.3s;
         }
         
-        h2 {
-            color: var(--secondary-color);
-            font-size: 1.5rem;
-        }
-        
-        .form-group {
-            margin-bottom: 15px;
-        }
-        
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 600;
-            color: var(--dark-color);
-        }
-        
-        input, select {
-            width: 100%;
-            padding: 10px 12px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            font-size: 14px;
-            transition: border-color 0.3s;
-        }
-        
-        input:focus, select:focus {
-            border-color: var(--primary-color);
-            outline: none;
-            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.2);
-        }
-        
-        .btn {
-            padding: 10px 15px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 600;
-            transition: all 0.3s;
-        }
-        
-        .btn-primary {
-            background: var(--primary-color);
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background: #2980b9;
-        }
-        
-        .btn-success {
-            background: var(--success-color);
-            color: white;
-        }
-        
-        .btn-success:hover {
-            background: #219653;
-        }
-        
-        .btn-danger {
-            background: var(--danger-color);
-            color: white;
-        }
-        
-        .btn-danger:hover {
-            background: #c0392b;
-        }
-        
-        .device-info-grid {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 12px;
-        }
-        
-        .info-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 0;
-            border-bottom: 1px solid #f0f0f0;
-        }
-        
-        .info-label {
-            font-weight: 600;
-            color: var(--dark-color);
-        }
-        
-        .info-value {
-            color: #555;
-        }
-        
-        .attendance-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-        }
-        
-        .attendance-table th, 
-        .attendance-table td {
-            padding: 10px 12px;
-            text-align: left;
-            border-bottom: 1px solid #eee;
-        }
-        
-        .attendance-table th {
-            background: var(--light-color);
-            font-weight: 600;
-            color: var(--dark-color);
-        }
-        
-        .attendance-table tr:hover {
+        .attendance-item:hover {
             background: #f9f9f9;
         }
         
-        .badge {
-            display: inline-block;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: 600;
+        .attendance-item:last-child {
+            border-bottom: none;
         }
         
-        .badge-success {
-            background: #e7f4e4;
-            color: #27ae60;
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
         }
         
-        .badge-warning {
-            background: #fef5e7;
-            color: #e67e22;
+        .avatar {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: #3498db;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 1.2rem;
         }
         
-        .badge-primary {
-            background: #ebf5fb;
-            color: #3498db;
-        }
-        
-        .notification {
-            padding: 12px;
-            margin: 15px 0;
-            border-radius: 5px;
-        }
-        
-        .notification.success {
-            background: #e7f4e4;
-            color: #27ae60;
-            border-left: 4px solid #27ae60;
-        }
-        
-        .notification.error {
-            background: #fde8e6;
-            color: #e74c3c;
-            border-left: 4px solid #e74c3c;
-        }
-        
-        .main-content {
+        .user-details {
             display: flex;
             flex-direction: column;
-            gap: 20px;
         }
         
-        .tabs {
+        .user-name {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        
+        .user-id {
+            font-size: 0.8rem;
+            color: #7f8c8d;
+        }
+        
+        .punch-info {
+            text-align: right;
+        }
+        
+        .punch-time {
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 5px;
+        }
+        
+        .verification-method {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+        
+        .fingerprint {
+            background: #e8f5e9;
+            color: #43a047;
+        }
+        
+        .pin {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        .card {
+            background: #fce4ec;
+            color: #d81b60;
+        }
+        
+        .stats-panel {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        .stats-panel h2 {
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #f1f1f1;
+            color: #2c3e50;
+        }
+        
+        .stat {
+            margin-bottom: 20px;
+        }
+        
+        .stat h3 {
+            font-size: 0.9rem;
+            color: #7f8c8d;
+            margin-bottom: 5px;
+        }
+        
+        .stat-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #2c3e50;
+        }
+        
+        .verification-stats {
+            margin-top: 30px;
+        }
+        
+        .verification-item {
             display: flex;
-            border-bottom: 1px solid #ddd;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #f1f1f1;
+        }
+        
+        .verification-item:last-child {
+            border-bottom: none;
+        }
+        
+        .no-data {
+            text-align: center;
+            padding: 30px;
+            color: #7f8c8d;
+        }
+        
+        .no-data i {
+            font-size: 3rem;
             margin-bottom: 15px;
         }
         
-        .tab {
-            padding: 10px 15px;
-            cursor: pointer;
-            border-bottom: 3px solid transparent;
+        .device-info {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
         }
         
-        .tab.active {
-            border-bottom-color: var(--primary-color);
-            font-weight: 600;
+        .device-info h3 {
+            margin-bottom: 10px;
+            color: #2c3e50;
         }
         
-        .tab-content {
-            display: none;
+        .device-info p {
+            margin-bottom: 5px;
+            font-size: 0.9rem;
         }
         
-        .tab-content.active {
-            display: block;
-        }
-        
-        @media (max-width: 900px) {
-            .content {
+        @media (max-width: 768px) {
+            .dashboard {
                 grid-template-columns: 1fr;
+            }
+            
+            header {
+                flex-direction: column;
+                text-align: center;
+                gap: 15px;
             }
         }
     </style>
@@ -296,758 +273,230 @@
 <body>
     <div class="container">
         <header>
-            <h1>ZKTeco Device Management</h1>
+            <div class="logo">
+                <i class="fas fa-fingerprint"></i>
+                <h1>ZKTeco Attendance Monitor</h1>
+            </div>
+            <div class="status">
+                <div class="status-indicator" id="status-indicator"></div>
+                <span id="status-text">Connecting to device...</span>
+            </div>
         </header>
         
-        <div class="status-bar">
-            <div class="connection-status">
-                <div class="status-indicator" id="status-indicator"></div>
-                <span id="connection-text">Disconnected</span>
-            </div>
-            <div id="current-time">00:00:00</div>
-        </div>
-        
-        <div class="content">
-            <div class="sidebar">
-                <div class="card">
-                    <div class="card-header">
-                        <h2>Device Configuration</h2>
-                    </div>
-                    <div class="form-group">
-                        <label for="device-ip">Device IP Address</label>
-                        <input type="text" id="device-ip" placeholder="192.168.1.201">
-                    </div>
-                    <div class="form-group">
-                        <label for="device-port">Device Port</label>
-                        <input type="number" id="device-port" value="4370">
-                    </div>
-                    <button class="btn btn-primary" id="connect-btn">Update Device IP</button>
-                </div>
-                
-                <div class="card">
-                    <div class="card-header">
-                        <h2>Device Information</h2>
-                    </div>
-                    <div class="device-info-grid">
-                        <div class="info-item">
-                            <span class="info-label">Device Name:</span>
-                            <span class="info-value" id="device-name">-</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Platform:</span>
-                            <span class="info-value" id="device-platform">-</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Firmware:</span>
-                            <span class="info-value" id="device-firmware">-</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">MAC Address:</span>
-                            <span class="info-value" id="device-mac">-</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Vendor:</span>
-                            <span class="info-value" id="device-vendor">-</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Users:</span>
-                            <span class="info-value" id="device-users">-</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Attendance Records:</span>
-                            <span class="info-value" id="device-attendance">-</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="card">
-                    <div class="card-header">
-                        <h2>Device Actions</h2>
-                    </div>
-                    <div style="display: flex; flex-direction: column; gap: 10px;">
-                        <button class="btn btn-primary" id="refresh-btn">Refresh Data</button>
-                        <button class="btn btn-primary" id="sync-time-btn">Sync Device Time</button>
-                        <button class="btn btn-primary" id="voice-test-btn">Voice Test</button>
-                        <button class="btn btn-danger" id="clear-data-btn">Clear All Data</button>
+        <div class="dashboard">
+            <div class="attendance-list">
+                <h2>Real-Time Attendance Logs</h2>
+                <div id="attendance-container">
+                    <div class="no-data">
+                        <i class="fas fa-clock"></i>
+                        <p>Waiting for attendance data from device...</p>
                     </div>
                 </div>
             </div>
             
-            <div class="main-content">
-                <div class="tabs">
-                    <div class="tab active" data-tab="attendance">Attendance</div>
-                    <div class="tab" data-tab="users">User Management</div>
-                    <div class="tab" data-tab="settings">Device Settings</div>
+            <div class="stats-panel">
+                <h2>Attendance Statistics</h2>
+                <div class="stat">
+                    <h3>TODAY'S PUNCHES</h3>
+                    <div class="stat-value" id="today-count">0</div>
+                </div>
+                <div class="stat">
+                    <h3>ACTIVE USERS</h3>
+                    <div class="stat-value" id="active-users">0</div>
                 </div>
                 
-                <div class="tab-content active" id="attendance">
-                    <div class="card">
-                        <div class="card-header">
-                            <h2>Real-time Attendance</h2>
-                        </div>
-                        <div id="realtime-attendance">
-                            <p>Waiting for attendance data...</p>
-                        </div>
+                <div class="verification-stats">
+                    <h3>VERIFICATION METHODS</h3>
+                    <div class="verification-item">
+                        <span>Fingerprint</span>
+                        <span id="fingerprint-count">0</span>
                     </div>
-                    
-                    <div class="card">
-                        <div class="card-header">
-                            <h2>Attendance Records</h2>
-                            <div>
-                                <button class="btn btn-primary" id="export-attendance">Export CSV</button>
-                                <button class="btn btn-danger" id="clear-attendance">Clear Logs</button>
-                            </div>
-                        </div>
-                        <div style="overflow-x: auto;">
-                            <table class="attendance-table">
-                                <thead>
-                                    <tr>
-                                        <th>User ID</th>
-                                        <th>Name</th>
-                                        <th>Time</th>
-                                        <th>Type</th>
-                                        <th>Method</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="attendance-body">
-                                    <tr>
-                                        <td colspan="5" style="text-align: center;">No attendance records available</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
+                    <div class="verification-item">
+                        <span>PIN</span>
+                        <span id="pin-count">0</span>
+                    </div>
+                    <div class="verification-item">
+                        <span>RFID Card</span>
+                        <span id="card-count">0</span>
                     </div>
                 </div>
                 
-                <div class="tab-content" id="users">
-                    <div class="card">
-                        <div class="card-header">
-                            <h2>User Management</h2>
-                            <button class="btn btn-primary" id="refresh-users">Refresh Users</button>
-                        </div>
-                        <div id="user-notification"></div>
-                        
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                            <div>
-                                <h3>Add/Update User</h3>
-                                <form id="user-form">
-                                    <div class="form-group">
-                                        <label for="uid">User ID</label>
-                                        <input type="number" id="uid" required>
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="userid">Badge Number</label>
-                                        <input type="text" id="userid">
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="name">Name</label>
-                                        <input type="text" id="name" required>
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="password">Password</label>
-                                        <input type="password" id="password">
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="role">Role</label>
-                                        <select id="role">
-                                            <option value="0">User</option>
-                                            <option value="1">Admin</option>
-                                            <option value="2">Super Admin</option>
-                                        </select>
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="cardno">Card Number</label>
-                                        <input type="number" id="cardno">
-                                    </div>
-                                    <button type="submit" class="btn btn-success">Save User</button>
-                                </form>
-                            </div>
-                            
-                            <div>
-                                <h3>Device Users</h3>
-                                <table class="attendance-table">
-                                    <thead>
-                                        <tr>
-                                            <th>ID</th>
-                                            <th>Name</th>
-                                            <th>Role</th>
-                                            <th>Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="users-table-body">
-                                        <tr>
-                                            <td colspan="4" style="text-align: center;">Loading users...</td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="tab-content" id="settings">
-                    <div class="card">
-                        <div class="card-header">
-                            <h2>Device Settings</h2>
-                        </div>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                            <div>
-                                <h3>Device Time</h3>
-                                <div class="form-group">
-                                    <label for="device-time">Current Device Time</label>
-                                    <input type="datetime-local" id="device-time">
-                                </div>
-                                <button class="btn btn-primary" id="set-time-btn">Set Device Time</button>
-                            </div>
-                            
-                            <div>
-                                <h3>Device Status</h3>
-                                <div class="info-item">
-                                    <span class="info-label">Face Recognition:</span>
-                                    <span class="info-value" id="face-status">-</span>
-                                </div>
-                                <div class="info-item">
-                                    <span class="info-label">SSR Status:</span>
-                                    <span class="info-value" id="ssr-status">-</span>
-                                </div>
-                                <div class="info-item">
-                                    <span class="info-label">PIN Code:</span>
-                                    <span class="info-value" id="pin-code">-</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                <div class="device-info">
+                    <h3>Device Information</h3>
+                    <p id="device-ip">IP: 192.168.1.201</p>
+                    <p id="device-port">Port: 4370</p>
+                    <p id="device-status">Status: Connecting...</p>
                 </div>
             </div>
         </div>
     </div>
 
+    <script src="/socket.io/socket.io.js"></script>
     <script>
+        // Connect to Socket.IO server
         const socket = io();
-        const attendanceBody = document.getElementById('attendance-body');
-        const realtimeAttendance = document.getElementById('realtime-attendance');
+        
+        // DOM elements
+        const attendanceContainer = document.getElementById('attendance-container');
+        const todayCount = document.getElementById('today-count');
+        const activeUsers = document.getElementById('active-users');
         const statusIndicator = document.getElementById('status-indicator');
-        const connectionText = document.getElementById('connection-text');
-        const currentTimeElement = document.getElementById('current-time');
-        const userNotification = document.getElementById('user-notification');
-        const usersTableBody = document.getElementById('users-table-body');
+        const statusText = document.getElementById('status-text');
+        const fingerprintCount = document.getElementById('fingerprint-count');
+        const pinCount = document.getElementById('pin-count');
+        const cardCount = document.getElementById('card-count');
+        const deviceIp = document.getElementById('device-ip');
+        const devicePort = document.getElementById('device-port');
+        const deviceStatus = document.getElementById('device-status');
         
-        // Device info elements
-        const deviceNameElement = document.getElementById('device-name');
-        const devicePlatformElement = document.getElementById('device-platform');
-        const deviceFirmwareElement = document.getElementById('device-firmware');
-        const deviceMacElement = document.getElementById('device-mac');
-        const deviceVendorElement = document.getElementById('device-vendor');
-        const deviceUsersElement = document.getElementById('device-users');
-        const deviceAttendanceElement = document.getElementById('device-attendance');
-        const faceStatusElement = document.getElementById('face-status');
-        const ssrStatusElement = document.getElementById('ssr-status');
-        const pinCodeElement = document.getElementById('pin-code');
-        
-        // Input elements
-        const deviceIpInput = document.getElementById('device-ip');
-        const devicePortInput = document.getElementById('device-port');
-        const deviceTimeInput = document.getElementById('device-time');
-        
-        // Buttons
-        const connectBtn = document.getElementById('connect-btn');
-        const refreshBtn = document.getElementById('refresh-btn');
-        const syncTimeBtn = document.getElementById('sync-time-btn');
-        const voiceTestBtn = document.getElementById('voice-test-btn');
-        const clearDataBtn = document.getElementById('clear-data-btn');
-        const exportAttendanceBtn = document.getElementById('export-attendance');
-        const clearAttendanceBtn = document.getElementById('clear-attendance');
-        const refreshUsersBtn = document.getElementById('refresh-users');
-        const setTimeBtn = document.getElementById('set-time-btn');
-        
-        // Form elements
-        const userForm = document.getElementById('user-form');
-        
-        // Tab functionality
-        document.querySelectorAll('.tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-                
-                tab.classList.add('active');
-                document.getElementById(tab.dataset.tab).classList.add('active');
-            });
-        });
-        
-        // Update current time
-        function updateCurrentTime() {
-            const now = new Date();
-            currentTimeElement.textContent = now.toLocaleTimeString();
-            deviceTimeInput.value = now.toISOString().slice(0, 16);
-        }
-        setInterval(updateCurrentTime, 1000);
-        updateCurrentTime();
-        
-        // Socket event listeners
-        socket.on('device_connected', (connected) => {
-            if (connected) {
-                statusIndicator.classList.add('connected');
-                connectionText.textContent = 'Connected';
-            } else {
-                statusIndicator.classList.remove('connected');
-                connectionText.textContent = 'Disconnected';
-            }
-        });
-        
-        socket.on('device_info', (info) => {
-            updateDeviceInfo(info);
-        });
-        
-        socket.on('device_ip', (ip) => {
-            deviceIpInput.value = ip;
-        });
-        
-        socket.on('attendance_record', (record) => {
-            // Update the real-time attendance section
-            realtimeAttendance.innerHTML = `
-                <p><strong>User:</strong> ${record.userName || 'Unknown'} (ID: ${record.userId})</p>
-                <p><strong>Time:</strong> ${new Date(record.timestamp).toLocaleString()}</p>
-                <p><strong>Type:</strong> <span class="badge ${record.punchType.toLowerCase().includes('in') ? 'badge-success' : 'badge-warning'}">${record.punchType}</span></p>
-                <p><strong>Method:</strong> <span class="badge badge-primary">${record.verificationMethod}</span></p>
-            `;
-            
-            // Add to the attendance table
-            addAttendanceRecord(record);
-        });
-        
-        socket.on('attendance_history', (history) => {
-            updateAttendanceTable(history);
-        });
-        
-        socket.on('users_data', (users) => {
-            updateUsersTable(users);
-        });
-        
-        // Update device information
-        function updateDeviceInfo(info) {
-            if (info.deviceName) deviceNameElement.textContent = info.deviceName;
-            if (info.platform) devicePlatformElement.textContent = info.platform;
-            if (info.firmwareVersion) deviceFirmwareElement.textContent = info.firmwareVersion;
-            if (info.macAddress) deviceMacElement.textContent = info.macAddress;
-            if (info.vendor) deviceVendorElement.textContent = info.vendor;
-            if (info.userCount !== undefined) deviceUsersElement.textContent = info.userCount;
-            if (info.attendanceSize !== undefined) deviceAttendanceElement.textContent = info.attendanceSize;
-            if (info.faceOn !== undefined) faceStatusElement.textContent = info.faceOn ? 'Enabled' : 'Disabled';
-            if (info.ssr !== undefined) ssrStatusElement.textContent = info.ssr;
-            if (info.pin !== undefined) pinCodeElement.textContent = info.pin;
-        }
-        
-        // Add a single attendance record to the table
-        function addAttendanceRecord(record) {
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td>${record.userId}</td>
-                <td>${record.userName || 'Unknown'}</td>
-                <td>${new Date(record.timestamp).toLocaleString()}</td>
-                <td><span class="badge ${record.punchType.toLowerCase().includes('in') ? 'badge-success' : 'badge-warning'}">${record.punchType}</span></td>
-                <td>${record.verificationMethod}</td>
-            `;
-            
-            // Add to the top of the table
-            if (attendanceBody.firstChild && attendanceBody.firstChild.textContent.includes('No attendance records')) {
-                attendanceBody.innerHTML = '';
-            }
-            attendanceBody.insertBefore(row, attendanceBody.firstChild);
-            
-            // Limit to 100 records
-            if (attendanceBody.children.length > 100) {
-                attendanceBody.removeChild(attendanceBody.lastChild);
-            }
-        }
-        
-        // Update the entire attendance table
-        function updateAttendanceTable(records) {
-            if (!records || records.length === 0) {
-                attendanceBody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No attendance records available</td></tr>';
-                return;
-            }
-            
-            attendanceBody.innerHTML = '';
-            
-            // Show latest records first
-            records.slice().reverse().forEach(record => {
-                addAttendanceRecord(record);
-            });
-        }
-        
-        // Update users table
-        function updateUsersTable(users) {
-            if (!users || users.length === 0) {
-                usersTableBody.innerHTML = '<tr><td colspan="4" style="text-align: center;">No users found</td></tr>';
-                return;
-            }
-            
-            usersTableBody.innerHTML = users.map(user => `
-                <tr>
-                    <td>${user.uid}</td>
-                    <td>${user.name}</td>
-                    <td>${user.role === 1 ? 'Admin' : 'User'}</td>
-                    <td>
-                        <button class="btn btn-danger" onclick="deleteUser(${user.uid})">Delete</button>
-                    </td>
-                </tr>
-            `).join('');
-        }
-        
-        // Show notification
-        function showNotification(message, type, element = userNotification) {
-            element.innerHTML = `
-                <div class="notification ${type}">${message}</div>
-            `;
-            
-            setTimeout(() => {
-                element.innerHTML = '';
-            }, 5000);
-        }
-        
-        // Connect to device with new IP
-        connectBtn.addEventListener('click', async () => {
-            const ip = deviceIpInput.value;
-            const port = devicePortInput.value;
-            
-            if (!isValidIP(ip)) {
-                alert('Please enter a valid IP address');
-                return;
-            }
-            
-            try {
-                const response = await fetch('/api/device-ip', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ ip })
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    showNotification('Device IP updated successfully', 'success', userNotification);
-                } else {
-                    showNotification('Error: ' + result.error, 'error', userNotification);
-                }
-            } catch (error) {
-                console.error('Error updating device IP:', error);
-                showNotification('Failed to update device IP', 'error', userNotification);
-            }
-        });
-        
-        // Refresh all data
-        refreshBtn.addEventListener('click', async () => {
-            try {
-                await Promise.all([
-                    fetch('/api/users').then(res => res.json()).then(users => updateUsersTable(users)),
-                    fetch('/api/attendance').then(res => res.json()).then(attendance => updateAttendanceTable(attendance)),
-                    fetch('/api/device-info').then(res => res.json()).then(info => updateDeviceInfo(info))
-                ]);
-                showNotification('Data refreshed successfully', 'success', userNotification);
-            } catch (error) {
-                console.error('Error refreshing data:', error);
-                showNotification('Failed to refresh data', 'error', userNotification);
-            }
-        });
-        
-        // Sync device time with browser time
-        syncTimeBtn.addEventListener('click', async () => {
-            try {
-                const now = new Date();
-                const response = await fetch('/api/device-time', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ dateTime: now.toISOString() })
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    showNotification('Device time synchronized successfully', 'success', userNotification);
-                } else {
-                    showNotification('Error: ' + result.error, 'error', userNotification);
-                }
-            } catch (error) {
-                console.error('Error syncing device time:', error);
-                showNotification('Failed to sync device time', 'error', userNotification);
-            }
-        });
-        
-        // Run voice test
-        voiceTestBtn.addEventListener('click', async () => {
-            try {
-                const response = await fetch('/api/voice-test', {
-                    method: 'POST'
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    showNotification('Voice test executed successfully', 'success', userNotification);
-                } else {
-                    showNotification('Error: ' + result.error, 'error', userNotification);
-                }
-            } catch (error) {
-                console.error('Error running voice test:', error);
-                showNotification('Failed to run voice test', 'error', userNotification);
-            }
-        });
-        
-        // Clear all data
-        clearDataBtn.addEventListener('click', async () => {
-            if (!confirm('Are you sure you want to clear ALL data from the device? This cannot be undone.')) return;
-            
-            try {
-                const response = await fetch('/api/clear-data', {
-                    method: 'DELETE'
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    attendanceBody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No attendance records available</td></tr>';
-                    usersTableBody.innerHTML = '<tr><td colspan="4" style="text-align: center;">No users found</td></tr>';
-                    realtimeAttendance.innerHTML = '<p>Waiting for attendance data...</p>';
-                    showNotification('All data cleared from device', 'success', userNotification);
-                } else {
-                    showNotification('Error: ' + result.error, 'error', userNotification);
-                }
-            } catch (error) {
-                console.error('Error clearing data:', error);
-                showNotification('Failed to clear device data', 'error', userNotification);
-            }
-        });
-        
-        // Export attendance to CSV
-        exportAttendanceBtn.addEventListener('click', async () => {
-            try {
-                const response = await fetch('/api/attendance');
-                const records = await response.json();
-                
-                if (!records || records.length === 0) {
-                    showNotification('No attendance records to export', 'error', userNotification);
-                    return;
-                }
-                
-                const csvContent = convertToCSV(records);
-                downloadCSV(csvContent, 'attendance_records.csv');
-                showNotification('Attendance data exported successfully', 'success', userNotification);
-            } catch (error) {
-                console.error('Error exporting attendance:', error);
-                showNotification('Failed to export attendance data', 'error', userNotification);
-            }
-        });
-        
-        // Clear attendance logs
-        clearAttendanceBtn.addEventListener('click', async () => {
-            if (!confirm('Are you sure you want to clear all attendance logs?')) return;
-            
-            try {
-                const response = await fetch('/api/attendance', {
-                    method: 'DELETE'
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    attendanceBody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No attendance records available</td></tr>';
-                    showNotification('Attendance logs cleared successfully', 'success', userNotification);
-                } else {
-                    showNotification('Error: ' + result.error, 'error', userNotification);
-                }
-            } catch (error) {
-                console.error('Error clearing attendance:', error);
-                showNotification('Failed to clear attendance logs', 'error', userNotification);
-            }
-        });
-        
-        // Refresh users
-        refreshUsersBtn.addEventListener('click', async () => {
-            try {
-                const response = await fetch('/api/users');
-                const users = await response.json();
-                updateUsersTable(users);
-                showNotification('Users refreshed successfully', 'success', userNotification);
-            } catch (error) {
-                console.error('Error refreshing users:', error);
-                showNotification('Failed to refresh users', 'error', userNotification);
-            }
-        });
-        
-        // Set device time
-        setTimeBtn.addEventListener('click', async () => {
-            try {
-                const dateTime = deviceTimeInput.value;
-                if (!dateTime) {
-                    showNotification('Please select a date and time', 'error', userNotification);
-                    return;
-                }
-                
-                const response = await fetch('/api/device-time', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ dateTime: new Date(dateTime).toISOString() })
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    showNotification('Device time updated successfully', 'success', userNotification);
-                } else {
-                    showNotification('Error: ' + result.error, 'error', userNotification);
-                }
-            } catch (error) {
-                console.error('Error setting device time:', error);
-                showNotification('Failed to set device time', 'error', userNotification);
-            }
-        });
-        
-        // Add/Update user form submission
-        userForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const userData = {
-                uid: parseInt(document.getElementById('uid').value),
-                userid: document.getElementById('userid').value,
-                name: document.getElementById('name').value,
-                password: document.getElementById('password').value,
-                role: parseInt(document.getElementById('role').value),
-                cardno: document.getElementById('cardno').value ? parseInt(document.getElementById('cardno').value) : 0
-            };
-            
-            try {
-                // Check if user exists to determine if we're adding or updating
-                const usersResponse = await fetch('/api/users');
-                const users = await usersResponse.json();
-                const userExists = users.some(u => u.uid === userData.uid);
-                
-                const url = userExists ? `/api/users/${userData.uid}` : '/api/users';
-                const method = userExists ? 'PUT' : 'POST';
-                
-                const response = await fetch(url, {
-                    method: method,
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(userData)
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    showNotification(`User ${userExists ? 'updated' : 'added'} successfully`, 'success', userNotification);
-                    userForm.reset();
-                    
-                    // Refresh users list
-                    const users = await fetch('/api/users').then(res => res.json());
-                    updateUsersTable(users);
-                } else {
-                    showNotification('Error: ' + result.error, 'error', userNotification);
-                }
-            } catch (error) {
-                console.error('Error saving user:', error);
-                showNotification('Failed to save user', 'error', userNotification);
-            }
-        });
-        
-        // Delete user function
-        window.deleteUser = async (uid) => {
-            if (!confirm('Are you sure you want to delete this user?')) return;
-            
-            try {
-                const response = await fetch(`/api/users/${uid}`, {
-                    method: 'DELETE'
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    showNotification('User deleted successfully', 'success', userNotification);
-                    
-                    // Refresh users list
-                    const users = await fetch('/api/users').then(res => res.json());
-                    updateUsersTable(users);
-                } else {
-                    showNotification('Error: ' + result.error, 'error', userNotification);
-                }
-            } catch (error) {
-                console.error('Error deleting user:', error);
-                showNotification('Failed to delete user', 'error', userNotification);
-            }
+        // Statistics
+        let punchCount = 0;
+        let usersMap = new Map();
+        let verificationCounts = {
+            fingerprint: 0,
+            pin: 0,
+            card: 0
         };
         
-        // Helper functions
-        function isValidIP(ip) {
-            const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
-            if (!ipRegex.test(ip)) return false;
+        // Function to update device status display
+        function updateDeviceStatus(status) {
+            if (status.connected) {
+                statusIndicator.classList.remove('status-disconnected');
+                statusText.textContent = 'Connected to device';
+                deviceStatus.textContent = 'Status: Connected';
+            } else {
+                statusIndicator.classList.add('status-disconnected');
+                statusText.textContent = 'Device disconnected';
+                deviceStatus.textContent = `Status: Disconnected - ${status.error || 'Trying to reconnect...'}`;
+            }
             
-            const parts = ip.split('.');
-            return parts.every(part => {
-                const num = parseInt(part);
-                return num >= 0 && num <= 255;
-            });
+            deviceIp.textContent = `IP: ${status.ip}`;
+            devicePort.textContent = `Port: ${status.port}`;
         }
         
-        function convertToCSV(records) {
-            const headers = ['User ID,Name,Time,Type,Method'];
-            const rows = records.map(record => 
-                `${record.uid},"${record.name || 'Unknown'}","${new Date(record.timestamp).toLocaleString()}","${record.punchType}","${record.verificationMethod}"`
-            );
-            return headers.concat(rows).join('\n');
-        }
-        
-        function downloadCSV(csvContent, filename) {
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.setAttribute('href', url);
-            link.setAttribute('download', filename);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-        }
-        
-        // Initialize page
-        async function initializePage() {
-            try {
-                // Get current device IP
-                const response = await fetch('/api/device-ip');
-                const data = await response.json();
-                deviceIpInput.value = data.ip;
-                
-                // Get device info
-                const infoResponse = await fetch('/api/device-info');
-                if (infoResponse.ok) {
-                    const info = await infoResponse.json();
-                    updateDeviceInfo(info);
+        // Function to display a new attendance punch
+        function displayAttendancePunch(logData) {
+            // Remove the no-data message if it exists
+            if (attendanceContainer.querySelector('.no-data')) {
+                attendanceContainer.innerHTML = '';
+            }
+            
+            // Parse the timestamp
+            const punchTime = new Date(logData.timestamp);
+            const timeString = punchTime.toLocaleTimeString();
+            const dateString = punchTime.toLocaleDateString();
+            
+            // Determine verification method
+            let methodClass = 'fingerprint';
+            let methodText = 'Fingerprint';
+            
+            if (logData.verificationMethod) {
+                const method = logData.verificationMethod.toString().toLowerCase();
+                if (method.includes('pin') || method.includes('password') || method === '1') {
+                    methodClass = 'pin';
+                    methodText = 'PIN';
+                    verificationCounts.pin++;
+                    pinCount.textContent = verificationCounts.pin;
+                } else if (method.includes('card') || method.includes('rfid') || method === '2') {
+                    methodClass = 'card';
+                    methodText = 'RFID Card';
+                    verificationCounts.card++;
+                    cardCount.textContent = verificationCounts.card;
+                } else {
+                    verificationCounts.fingerprint++;
+                    fingerprintCount.textContent = verificationCounts.fingerprint;
                 }
-                
-                // Get attendance data
-                const attendanceResponse = await fetch('/api/attendance');
-                if (attendanceResponse.ok) {
-                    const attendance = await attendanceResponse.json();
-                    updateAttendanceTable(attendance);
-                }
-                
-                // Get users
-                const usersResponse = await fetch('/api/users');
-                if (usersResponse.ok) {
-                    const users = await usersResponse.json();
-                    updateUsersTable(users);
-                }
-            } catch (error) {
-                console.error('Error initializing page:', error);
+            } else {
+                verificationCounts.fingerprint++;
+                fingerprintCount.textContent = verificationCounts.fingerprint;
+            }
+            
+            // Track unique users
+            if (logData.userId && !usersMap.has(logData.userId)) {
+                usersMap.set(logData.userId, true);
+                activeUsers.textContent = usersMap.size;
+            }
+            
+            // Update punch count
+            punchCount++;
+            todayCount.textContent = punchCount;
+            
+            // Get user name or use default
+            let userName = 'Unknown User';
+            let userInitial = 'U';
+            
+            if (logData.userInfo && logData.userInfo.name) {
+                userName = logData.userInfo.name;
+                userInitial = userName.charAt(0);
+            } else if (logData.userId) {
+                userName = `User ${logData.userId}`;
+                userInitial = logData.userId.toString().charAt(0);
+            }
+            
+            // Create attendance item HTML
+            const attendanceItem = document.createElement('div');
+            attendanceItem.className = 'attendance-item';
+            attendanceItem.innerHTML = `
+                <div class="user-info">
+                    <div class="avatar">${userInitial}</div>
+                    <div class="user-details">
+                        <div class="user-name">${userName}</div>
+                        <div class="user-id">ID: ${logData.userId || 'N/A'}</div>
+                    </div>
+                </div>
+                <div class="punch-info">
+                    <div class="punch-time">${timeString} <span style="color: #95a5a6; font-weight: normal;">${dateString}</span></div>
+                    <span class="verification-method ${methodClass}">${methodText}</span>
+                </div>
+            `;
+            
+            // Add to the top of the container
+            attendanceContainer.insertBefore(attendanceItem, attendanceContainer.firstChild);
+            
+            // Limit to 50 items
+            if (attendanceContainer.children.length > 50) {
+                attendanceContainer.removeChild(attendanceContainer.lastChild);
             }
         }
         
-        initializePage();
+        // Listen for real-time attendance logs from server
+        socket.on('new_attendance_log', (logData) => {
+            console.log('Received attendance log:', logData);
+            displayAttendancePunch(logData);
+        });
+        
+        // Listen for device status updates
+        socket.on('device_status', (status) => {
+            console.log('Device status:', status);
+            updateDeviceStatus(status);
+        });
+        
+        // Listen for connection status
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            statusText.textContent = 'Connected to server, waiting for device...';
+        });
+        
+        socket.on('disconnect', () => {
+            console.log('Disconnected from server');
+            statusText.textContent = 'Disconnected from server';
+            statusIndicator.classList.add('status-disconnected');
+        });
+        
+        // Fetch initial users data
+        fetch('/api/users')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to fetch users');
+                }
+                return response.json();
+            })
+            .then(users => {
+                console.log('Loaded users:', users.length);
+            })
+            .catch(error => {
+                console.error('Error loading users:', error);
+            });
     </script>
 </body>
 </html>
