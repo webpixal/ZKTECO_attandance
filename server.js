@@ -11,8 +11,8 @@ const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-const EXPRESS_PORT = process.env.EXPRESS_PORT || 3000;
-const DEVICE_IP = '192.168.1.201';
+const EXPRESS_PORT = process.env.EXPRESS_PORT || 5500;
+const DEVICE_IP = '192.168.159.201';
 const DEVICE_PORT = 4370;
 
 let deviceInstance;
