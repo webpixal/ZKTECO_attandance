@@ -36,7 +36,7 @@ app.get('/api/users', async (req, res) => {
 });
 
 // New endpoint to get recent attendance data
-app.get('/api/recent-attendance', async (req, res) => {
+app.get('/api/attendance', async (req, res) => {
     if (!deviceInstance) {
         return res.status(503).json({ error: 'Device not connected' });
     }
