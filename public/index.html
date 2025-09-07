@@ -1,502 +1,59 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ZKTeco Real-Time Attendance</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <title>Real-time Attendance Monitor</title>
+    <script src="/socket.io/socket.io.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        body { font-family: Arial, sans-serif; }
+        #attendance-container { margin: 20px; }
+        .attendance-item { 
+            border: 1px solid #ddd; 
+            padding: 10px; 
+            margin-bottom: 10px; 
+            border-radius: 5px;
         }
-        
-        body {
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 20px;
-            background: #2c3e50;
-            color: white;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-        }
-        
-        .logo {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-        
-        .logo i {
-            font-size: 2.5rem;
-        }
-        
-        .logo h1 {
-            font-size: 1.8rem;
-        }
-        
-        .status {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            background: #34495e;
-            padding: 10px 20px;
-            border-radius: 30px;
-        }
-        
-        .status-indicator {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background: #2ecc71;
-            animation: pulse 1.5s infinite;
-        }
-        
-        .status-disconnected {
-            background: #e74c3c;
-        }
-        
-        @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.5; }
-            100% { opacity: 1; }
-        }
-        
-        .dashboard {
-            display: grid;
-            grid-template-columns: 1fr 350px;
-            gap: 20px;
-        }
-        
-        .attendance-list {
-            background: white;
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-            max-height: 600px;
-            overflow-y: auto;
-        }
-        
-        .attendance-list h2 {
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #f1f1f1;
-            color: #2c3e50;
-        }
-        
-        .attendance-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 15px;
-            border-bottom: 1px solid #f1f1f1;
-            transition: background 0.3s;
-        }
-        
-        .attendance-item:hover {
-            background: #f9f9f9;
-        }
-        
-        .attendance-item:last-child {
-            border-bottom: none;
-        }
-        
-        .user-info {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-        
-        .avatar {
-            width: 50px;
-            height: 50px;
-            border-radius: 50%;
-            background: #3498db;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
-            font-size: 1.2rem;
-        }
-        
-        .user-details {
-            display: flex;
-            flex-direction: column;
-        }
-        
-        .user-name {
-            font-weight: 600;
-            color: #2c3e50;
-        }
-        
-        .user-id {
-            font-size: 0.8rem;
-            color: #7f8c8d;
-        }
-        
-        .punch-info {
-            text-align: right;
-        }
-        
-        .punch-time {
-            font-weight: 600;
-            color: #2c3e50;
-            margin-bottom: 5px;
-        }
-        
-        .verification-method {
-            display: inline-block;
-            padding: 5px 10px;
-            border-radius: 20px;
-            font-size: 0.8rem;
-            font-weight: 500;
-        }
-        
-        .fingerprint {
-            background: #e8f5e9;
-            color: #43a047;
-        }
-        
-        .pin {
-            background: #e3f2fd;
-            color: #1976d2;
-        }
-        
-        .card {
-            background: #fce4ec;
-            color: #d81b60;
-        }
-        
-        .stats-panel {
-            background: white;
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-        }
-        
-        .stats-panel h2 {
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #f1f1f1;
-            color: #2c3e50;
-        }
-        
-        .stat {
-            margin-bottom: 20px;
-        }
-        
-        .stat h3 {
-            font-size: 0.9rem;
-            color: #7f8c8d;
-            margin-bottom: 5px;
-        }
-        
-        .stat-value {
-            font-size: 1.8rem;
-            font-weight: 700;
-            color: #2c3e50;
-        }
-        
-        .verification-stats {
-            margin-top: 30px;
-        }
-        
-        .verification-item {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 10px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #f1f1f1;
-        }
-        
-        .verification-item:last-child {
-            border-bottom: none;
-        }
-        
-        .no-data {
-            text-align: center;
-            padding: 30px;
-            color: #7f8c8d;
-        }
-        
-        .no-data i {
-            font-size: 3rem;
-            margin-bottom: 15px;
-        }
-        
-        .device-info {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 8px;
-            margin-top: 20px;
-        }
-        
-        .device-info h3 {
-            margin-bottom: 10px;
-            color: #2c3e50;
-        }
-        
-        .device-info p {
-            margin-bottom: 5px;
-            font-size: 0.9rem;
-        }
-        
-        @media (max-width: 768px) {
-            .dashboard {
-                grid-template-columns: 1fr;
-            }
-            
-            header {
-                flex-direction: column;
-                text-align: center;
-                gap: 15px;
-            }
-        }
+        .new-item { background-color: #eaffea; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <div class="logo">
-                <i class="fas fa-fingerprint"></i>
-                <h1>ZKTeco Attendance Monitor</h1>
-            </div>
-            <div class="status">
-                <div class="status-indicator" id="status-indicator"></div>
-                <span id="status-text">Connecting to device...</span>
-            </div>
-        </header>
-        
-        <div class="dashboard">
-            <div class="attendance-list">
-                <h2>Real-Time Attendance Logs</h2>
-                <div id="attendance-container">
-                    <div class="no-data">
-                        <i class="fas fa-clock"></i>
-                        <p>Waiting for attendance data from device...</p>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="stats-panel">
-                <h2>Attendance Statistics</h2>
-                <div class="stat">
-                    <h3>TODAY'S PUNCHES</h3>
-                    <div class="stat-value" id="today-count">0</div>
-                </div>
-                <div class="stat">
-                    <h3>ACTIVE USERS</h3>
-                    <div class="stat-value" id="active-users">0</div>
-                </div>
-                
-                <div class="verification-stats">
-                    <h3>VERIFICATION METHODS</h3>
-                    <div class="verification-item">
-                        <span>Fingerprint</span>
-                        <span id="fingerprint-count">0</span>
-                    </div>
-                    <div class="verification-item">
-                        <span>PIN</span>
-                        <span id="pin-count">0</span>
-                    </div>
-                    <div class="verification-item">
-                        <span>RFID Card</span>
-                        <span id="card-count">0</span>
-                    </div>
-                </div>
-                
-                <div class="device-info">
-                    <h3>Device Information</h3>
-                    <p id="device-ip">IP: 192.168.1.201</p>
-                    <p id="device-port">Port: 4370</p>
-                    <p id="device-status">Status: Connecting...</p>
-                </div>
-            </div>
-        </div>
-    </div>
+    <h1>Real-time Attendance Monitor</h1>
+    <div id="attendance-container"></div>
 
-    <script src="/socket.io/socket.io.js"></script>
     <script>
-        // Connect to Socket.IO server
         const socket = io();
+        const container = document.getElementById('attendance-container');
         
-        // DOM elements
-        const attendanceContainer = document.getElementById('attendance-container');
-        const todayCount = document.getElementById('today-count');
-        const activeUsers = document.getElementById('active-users');
-        const statusIndicator = document.getElementById('status-indicator');
-        const statusText = document.getElementById('status-text');
-        const fingerprintCount = document.getElementById('fingerprint-count');
-        const pinCount = document.getElementById('pin-count');
-        const cardCount = document.getElementById('card-count');
-        const deviceIp = document.getElementById('device-ip');
-        const devicePort = document.getElementById('device-port');
-        const deviceStatus = document.getElementById('device-status');
-        
-        // Statistics
-        let punchCount = 0;
-        let usersMap = new Map();
-        let verificationCounts = {
-            fingerprint: 0,
-            pin: 0,
-            card: 0
-        };
-        
-        // Function to update device status display
-        function updateDeviceStatus(status) {
-            if (status.connected) {
-                statusIndicator.classList.remove('status-disconnected');
-                statusText.textContent = 'Connected to device';
-                deviceStatus.textContent = 'Status: Connected';
-            } else {
-                statusIndicator.classList.add('status-disconnected');
-                statusText.textContent = 'Device disconnected';
-                deviceStatus.textContent = `Status: Disconnected - ${status.error || 'Trying to reconnect...'}`;
-            }
+        // Listen for real-time attendance records
+        socket.on('attendance_record', (record) => {
+            console.log('New attendance record:', record);
             
-            deviceIp.textContent = `IP: ${status.ip}`;
-            devicePort.textContent = `Port: ${status.port}`;
-        }
-        
-        // Function to display a new attendance punch
-        function displayAttendancePunch(logData) {
-            // Remove the no-data message if it exists
-            if (attendanceContainer.querySelector('.no-data')) {
-                attendanceContainer.innerHTML = '';
-            }
-            
-            // Parse the timestamp
-            const punchTime = new Date(logData.timestamp);
-            const timeString = punchTime.toLocaleTimeString();
-            const dateString = punchTime.toLocaleDateString();
-            
-            // Determine verification method
-            let methodClass = 'fingerprint';
-            let methodText = 'Fingerprint';
-            
-            if (logData.verificationMethod) {
-                const method = logData.verificationMethod.toString().toLowerCase();
-                if (method.includes('pin') || method.includes('password') || method === '1') {
-                    methodClass = 'pin';
-                    methodText = 'PIN';
-                    verificationCounts.pin++;
-                    pinCount.textContent = verificationCounts.pin;
-                } else if (method.includes('card') || method.includes('rfid') || method === '2') {
-                    methodClass = 'card';
-                    methodText = 'RFID Card';
-                    verificationCounts.card++;
-                    cardCount.textContent = verificationCounts.card;
-                } else {
-                    verificationCounts.fingerprint++;
-                    fingerprintCount.textContent = verificationCounts.fingerprint;
-                }
-            } else {
-                verificationCounts.fingerprint++;
-                fingerprintCount.textContent = verificationCounts.fingerprint;
-            }
-            
-            // Track unique users
-            if (logData.userId && !usersMap.has(logData.userId)) {
-                usersMap.set(logData.userId, true);
-                activeUsers.textContent = usersMap.size;
-            }
-            
-            // Update punch count
-            punchCount++;
-            todayCount.textContent = punchCount;
-            
-            // Get user name or use default
-            let userName = 'Unknown User';
-            let userInitial = 'U';
-            
-            if (logData.userInfo && logData.userInfo.name) {
-                userName = logData.userInfo.name;
-                userInitial = userName.charAt(0);
-            } else if (logData.userId) {
-                userName = `User ${logData.userId}`;
-                userInitial = logData.userId.toString().charAt(0);
-            }
-            
-            // Create attendance item HTML
-            const attendanceItem = document.createElement('div');
-            attendanceItem.className = 'attendance-item';
-            attendanceItem.innerHTML = `
-                <div class="user-info">
-                    <div class="avatar">${userInitial}</div>
-                    <div class="user-details">
-                        <div class="user-name">${userName}</div>
-                        <div class="user-id">ID: ${logData.userId || 'N/A'}</div>
-                    </div>
-                </div>
-                <div class="punch-info">
-                    <div class="punch-time">${timeString} <span style="color: #95a5a6; font-weight: normal;">${dateString}</span></div>
-                    <span class="verification-method ${methodClass}">${methodText}</span>
-                </div>
+            const item = document.createElement('div');
+            item.className = 'attendance-item new-item';
+            item.innerHTML = `
+                <strong>${record.userName || 'Unknown User'} (ID: ${record.userId})</strong><br>
+                Time: ${new Date(record.timestamp).toLocaleString()}<br>
+                Method: ${record.verificationMethod}<br>
+                Type: ${record.punchType}
             `;
             
-            // Add to the top of the container
-            attendanceContainer.insertBefore(attendanceItem, attendanceContainer.firstChild);
+            // Add to top of container
+            container.insertBefore(item, container.firstChild);
             
-            // Limit to 50 items
-            if (attendanceContainer.children.length > 50) {
-                attendanceContainer.removeChild(attendanceContainer.lastChild);
+            // Remove highlight after 5 seconds
+            setTimeout(() => {
+                item.classList.remove('new-item');
+            }, 5000);
+            
+            // Keep only the last 50 records
+            if (container.children.length > 50) {
+                container.removeChild(container.lastChild);
             }
-        }
-        
-        // Listen for real-time attendance logs from server
-        socket.on('new_attendance_log', (logData) => {
-            console.log('Received attendance log:', logData);
-            displayAttendancePunch(logData);
         });
         
-        // Listen for device status updates
-        socket.on('device_status', (status) => {
-            console.log('Device status:', status);
-            updateDeviceStatus(status);
+        // Listen for users data
+        socket.on('users_data', (users) => {
+            console.log('Received users:', users);
         });
-        
-        // Listen for connection status
-        socket.on('connect', () => {
-            console.log('Connected to server');
-            statusText.textContent = 'Connected to server, waiting for device...';
-        });
-        
-        socket.on('disconnect', () => {
-            console.log('Disconnected from server');
-            statusText.textContent = 'Disconnected from server';
-            statusIndicator.classList.add('status-disconnected');
-        });
-        
-        // Fetch initial users data
-        fetch('/api/users')
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Failed to fetch users');
-                }
-                return response.json();
-            })
-            .then(users => {
-                console.log('Loaded users:', users.length);
-            })
-            .catch(error => {
-                console.error('Error loading users:', error);
-            });
     </script>
 </body>
 </html>
