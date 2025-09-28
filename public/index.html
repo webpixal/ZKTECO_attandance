@@ -89,7 +89,7 @@
 
         .section-header {
             display: flex;
-            justify-content: between;
+            justify-content: space-between;
             align-items: center;
             margin-bottom: 20px;
             padding-bottom: 15px;
@@ -256,11 +256,17 @@
             color: #666;
         }
 
+        .device-info-container {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
         .device-info-item {
             display: flex;
             justify-content: space-between;
-            padding: 8px 0;
+            padding: 12px 0;
             border-bottom: 1px solid #f1f3f4;
+            align-items: flex-start;
         }
 
         .device-info-item:last-child {
@@ -270,10 +276,14 @@
         .info-label {
             font-weight: 600;
             color: #555;
+            min-width: 140px;
         }
 
         .info-value {
             color: #333;
+            text-align: right;
+            flex: 1;
+            word-break: break-word;
         }
 
         .notification {
@@ -364,6 +374,29 @@
         .verification-card { color: #007bff; }
         .verification-password { color: #6c757d; }
         .verification-face { color: #e83e8c; }
+
+        .refresh-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #667eea;
+            font-size: 1.2em;
+            margin-left: 10px;
+            transition: transform 0.3s ease;
+        }
+
+        .refresh-btn:hover {
+            transform: rotate(180deg);
+        }
+
+        .refresh-btn.loading {
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body>
@@ -472,7 +505,12 @@
                 <div class="users-widget">
                     <div class="section-header">
                         <h2><i>👥</i> Users</h2>
-                        <span class="badge badge-primary" id="usersCount">0</span>
+                        <div>
+                            <span class="badge badge-primary" id="usersCount">0</span>
+                            <button class="refresh-btn" onclick="loadUsers()" title="Refresh Users">
+                                <i class="fas fa-sync-alt"></i>
+                            </button>
+                        </div>
                     </div>
                     <div class="user-list" id="userList">
                         <div class="loading">Loading users...</div>
@@ -483,8 +521,11 @@
                 <div class="device-widget">
                     <div class="section-header">
                         <h2><i>⚙️</i> Device Info</h2>
+                        <button class="refresh-btn" onclick="loadDeviceInfo()" title="Refresh Device Info">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
                     </div>
-                    <div id="deviceInfo">
+                    <div class="device-info-container" id="deviceInfo">
                         <div class="loading">Loading device information...</div>
                     </div>
                 </div>
@@ -496,6 +537,9 @@
     <div class="notification" id="notification">
         <div id="notificationMessage"></div>
     </div>
+
+    <!-- Add Font Awesome for icons -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
 
     <script>
         // Socket.IO connection
@@ -510,6 +554,10 @@
         document.addEventListener('DOMContentLoaded', function() {
             connectToSocket();
             setupEventListeners();
+            // Load initial data via API calls
+            loadDeviceInfo();
+            loadUsers();
+            loadAttendance();
         });
 
         function connectToSocket() {
@@ -546,10 +594,11 @@
                 populateUserFilter();
             });
 
-            // Listen for device info
-            socket.on('device_info', (info) => {
-                deviceInfo = info;
-                renderDeviceInfo();
+            // Listen for device connection status
+            socket.on('device_connection', (data) => {
+                showNotification(data.message, data.status === 'connected' ? 'success' : 'error');
+                updateConnectionStatus(data.status === 'connected' ? 'Connected' : 'Disconnected', 
+                                      data.status === 'connected' ? 'connected' : 'disconnected');
             });
         }
 
@@ -559,6 +608,81 @@
             
             // Update time every second
             setInterval(updateTime, 1000);
+        }
+
+        // API CALL FUNCTIONS
+        async function loadDeviceInfo() {
+            const refreshBtn = document.querySelector('.device-widget .refresh-btn');
+            refreshBtn.classList.add('loading');
+            
+            try {
+                const response = await fetch('/api/device-info');
+                if (!response.ok) {
+                    throw new Error('Failed to fetch device info');
+                }
+                deviceInfo = await response.json();
+                renderDeviceInfo();
+                showNotification('Device information loaded', 'success');
+            } catch (error) {
+                console.error('Error loading device info:', error);
+                showNotification('Failed to load device information', 'error');
+                document.getElementById('deviceInfo').innerHTML = 
+                    '<div class="loading">Error loading device information</div>';
+            } finally {
+                refreshBtn.classList.remove('loading');
+            }
+        }
+
+        async function loadUsers() {
+            const refreshBtn = document.querySelector('.users-widget .refresh-btn');
+            refreshBtn.classList.add('loading');
+            
+            try {
+                const response = await fetch('/api/users');
+                if (!response.ok) {
+                    throw new Error('Failed to fetch users');
+                }
+                usersData = await response.json();
+                renderUserList();
+                updateUserCount();
+                populateUserFilter();
+                showNotification('Users loaded', 'success');
+            } catch (error) {
+                console.error('Error loading users:', error);
+                showNotification('Failed to load users', 'error');
+                document.getElementById('userList').innerHTML = 
+                    '<div class="loading">Error loading users</div>';
+            } finally {
+                refreshBtn.classList.remove('loading');
+            }
+        }
+
+        async function loadAttendance(date = null) {
+            let url = '/api/attendance';
+            if (date) {
+                url += `?date=${date}`;
+            }
+            
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error('Failed to fetch attendance');
+                }
+                const data = await response.json();
+                if (data.success) {
+                    attendanceData = data.records;
+                    renderAttendanceTable();
+                    updateStats();
+                    populateUserFilter();
+                } else {
+                    throw new Error(data.error || 'Failed to load attendance');
+                }
+            } catch (error) {
+                console.error('Error loading attendance:', error);
+                showNotification('Failed to load attendance records', 'error');
+                document.getElementById('attendanceBody').innerHTML = 
+                    '<tr><td colspan="6" class="loading">Error loading attendance data</td></tr>';
+            }
         }
 
         function renderAttendanceTable() {
@@ -633,28 +757,17 @@
         function renderDeviceInfo() {
             const deviceInfoDiv = document.getElementById('deviceInfo');
             
-            deviceInfoDiv.innerHTML = `
+            if (!deviceInfo || Object.keys(deviceInfo).length === 0) {
+                deviceInfoDiv.innerHTML = '<div class="loading">No device information available</div>';
+                return;
+            }
+            
+            deviceInfoDiv.innerHTML = Object.entries(deviceInfo).map(([key, value]) => `
                 <div class="device-info-item">
-                    <span class="info-label">IP Address:</span>
-                    <span class="info-value">${deviceInfo.ip || 'N/A'}</span>
+                    <span class="info-label">${key}:</span>
+                    <span class="info-value">${value || 'N/A'}</span>
                 </div>
-                <div class="device-info-item">
-                    <span class="info-label">Model:</span>
-                    <span class="info-value">${deviceInfo.deviceName || 'N/A'}</span>
-                </div>
-                <div class="device-info-item">
-                    <span class="info-label">Serial No:</span>
-                    <span class="info-value">${deviceInfo.serialNumber || 'N/A'}</span>
-                </div>
-                <div class="device-info-item">
-                    <span class="info-label">Firmware:</span>
-                    <span class="info-value">${deviceInfo.firmwareVersion || 'N/A'}</span>
-                </div>
-                <div class="device-info-item">
-                    <span class="info-label">Platform:</span>
-                    <span class="info-value">${deviceInfo.platform || 'N/A'}</span>
-                </div>
-            `;
+            `).join('');
         }
 
         function updateStats() {
@@ -726,8 +839,7 @@
 
         function refreshAttendance() {
             showNotification('Refreshing attendance data...', 'warning');
-            // You can trigger a refresh via Socket.IO or API call
-            socket.emit('refresh_attendance');
+            loadAttendance();
         }
 
         function exportData() {

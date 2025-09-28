@@ -36,7 +36,45 @@ let attendanceHistory = []; // Store attendance history
 app.use(express.json());
 app.use(express.static('public')); // Serve static files
 
-// ===== HELPER FUNCTIONS =====
+// ===== ENHANCED HELPER FUNCTIONS =====
+function decodeDeviceString(str) {
+    if (!str || typeof str !== 'string') return 'Unknown';
+    
+    // Remove non-printable characters and try to extract readable content
+    try {
+        // First attempt: Remove non-printable ASCII characters
+        let cleanStr = str.replace(/[^\x20-\x7E]/g, '');
+        
+        if (cleanStr.length > 0) {
+            return cleanStr || 'Unknown';
+        }
+        
+        // Second attempt: Try to decode as hex or find patterns
+        const buffer = Buffer.from(str, 'binary');
+        
+        // Look for MAC address pattern
+        const macMatch = buffer.toString('hex').match(/([0-9a-f]{2}[:-]){5}([0-9a-f]{2})/i);
+        if (macMatch) return macMatch[0];
+        
+        // Try to find any readable ASCII sequences
+        const asciiSequences = [];
+        for (let i = 0; i < buffer.length; i++) {
+            if (buffer[i] >= 32 && buffer[i] <= 126) {
+                asciiSequences.push(String.fromCharCode(buffer[i]));
+            }
+        }
+        
+        if (asciiSequences.length > 0) {
+            return asciiSequences.join('') || 'Unknown';
+        }
+        
+        return 'Unreadable Data';
+    } catch (error) {
+        console.error('Error decoding device string:', error);
+        return 'Decoding Error';
+    }
+}
+
 function findUserName(userId) {
     if (!usersCache || !Array.isArray(usersCache)) return 'Unknown';
     const user = usersCache.find(u => u.userId == userId || u.id == userId);
@@ -90,7 +128,20 @@ function parseZktecoTime(recordTime) {
     }
 }
 
-// ===== API ROUTES =====
+// Safe device method caller with error handling
+async function safeDeviceCall(methodName, defaultValue = 'Unknown') {
+    if (!deviceInstance) return defaultValue;
+    
+    try {
+        const result = await deviceInstance[methodName]();
+        return decodeDeviceString(result) || defaultValue;
+    } catch (error) {
+        console.error(`Error calling ${methodName}:`, error.message);
+        return defaultValue;
+    }
+}
+
+// ===== ENHANCED API ROUTES =====
 
 // API route to get device information
 app.get('/api/device-info', async (_req, res) => {
@@ -98,11 +149,61 @@ app.get('/api/device-info', async (_req, res) => {
         return res.status(503).json({ error: 'Device not connected' });
     }
     try {
-        const deviceInfo = await deviceInstance.getInfo();
-        res.status(200).json(deviceInfo);
+        const formattedInfo = {
+            'IP Address': DEVICE_IP,
+            'Port': DEVICE_PORT,
+            'Connection Status': 'Connected'
+        };
+
+        // Get basic device info
+        try {
+            const basicInfo = await deviceInstance.getInfo();
+            formattedInfo['Total Users'] = basicInfo?.userCount || 0;
+            formattedInfo['Total Attendance Records'] = basicInfo?.attendanceCount || 0;
+        } catch (e) {
+            console.error('Error getting basic info:', e);
+        }
+
+        // Get detailed device information with safe calls
+        formattedInfo['Device Name'] = await safeDeviceCall('getDeviceName');
+        formattedInfo['Firmware Version'] = await safeDeviceCall('getDeviceVersion');
+        formattedInfo['Platform'] = await safeDeviceCall('getPlatform');
+        formattedInfo['Operating System'] = await safeDeviceCall('getOS');
+        formattedInfo['Vendor'] = await safeDeviceCall('getVendor');
+        formattedInfo['MAC Address'] = await safeDeviceCall('getMacAddress');
+        formattedInfo['Manufacturing Date'] = await safeDeviceCall('getProductTime');
+        formattedInfo['Serial Number'] = await safeDeviceCall('getSerialNumber');
+
+        // Get face detection status
+        try {
+            formattedInfo['Face Detection'] = await deviceInstance.getFaceOn() ? 'Enabled' : 'Disabled';
+        } catch (e) {
+            console.error('Error getting face detection status:', e);
+            formattedInfo['Face Detection'] = 'Unknown';
+        }
+
+        // Get device time
+        try {
+            const deviceTime = await deviceInstance.getTime();
+            formattedInfo['Device Time'] = deviceTime ? new Date(deviceTime).toLocaleString() : 'Unknown';
+        } catch (e) {
+            console.error('Error getting device time:', e);
+        }
+ 
+        // Clean up the info object
+        const cleanInfo = Object.fromEntries(
+            Object.entries(formattedInfo).filter(([_, value]) => 
+                value != null && value !== 'Unknown' && value !== 'Decoding Error'
+            )
+        );
+
+        res.status(200).json(cleanInfo);
     } catch (error) {
         console.error('Error fetching device info:', error);
-        res.status(500).json({ error: 'Failed to fetch device information' });
+        res.status(500).json({ 
+            error: 'Failed to fetch device information',
+            details: error.message
+        });
     }
 });
 
@@ -113,14 +214,16 @@ app.get('/api/users', async (_req, res) => {
     }
     try {
         console.log('Fetching users from device...');
-        const users = await deviceInstance.getUsers();
+        let users = await deviceInstance.getUsers();
         
-        if (!users || !Array.isArray(users)) {
-            console.error('Invalid users data received:', users);
-            return res.status(500).json({ error: 'Invalid data received from device' });
+        // Handle if users is an object with a data property
+        if (users && typeof users === 'object' && !Array.isArray(users)) {
+            users = Object.values(users).find(val => Array.isArray(val)) || [];
         }
         
-        console.log(`Successfully fetched ${users.length} users from device`);
+        // Ensure we have an array
+        users = Array.isArray(users) ? users : [];
+        
         usersCache = users;
         res.status(200).json(users);
     } catch (error) {
@@ -140,6 +243,10 @@ app.post('/api/users', async (req, res) => {
     try {
         const { userId, name, cardNumber, role, password } = req.body;
         
+        if (!userId || !name) {
+            return res.status(400).json({ error: 'User ID and Name are required' });
+        }
+        
         // Create user object based on device requirements
         const user = {
             userId: parseInt(userId),
@@ -154,6 +261,9 @@ app.post('/api/users', async (req, res) => {
         
         // Refresh users cache
         usersCache = await deviceInstance.getUsers();
+        
+        // Broadcast updated users list
+        io.emit('users_data', usersCache);
         
         res.status(201).json({ message: 'User added successfully', user: user });
     } catch (error) {
@@ -191,6 +301,9 @@ app.put('/api/users/:userId', async (req, res) => {
         // Refresh users cache
         usersCache = await deviceInstance.getUsers();
         
+        // Broadcast updated users list
+        io.emit('users_data', usersCache);
+        
         res.status(200).json({ message: 'User updated successfully', user: user });
     } catch (error) {
         console.error('Error updating user:', error);
@@ -211,6 +324,9 @@ app.delete('/api/users/:userId', async (req, res) => {
         // Refresh users cache
         usersCache = await deviceInstance.getUsers();
         
+        // Broadcast updated users list
+        io.emit('users_data', usersCache);
+        
         res.status(200).json({ message: 'User deleted successfully' });
     } catch (error) {
         console.error('Error deleting user:', error);
@@ -218,8 +334,8 @@ app.delete('/api/users/:userId', async (req, res) => {
     }
 });
 
-// API route to get attendance history - CORRECTED VERSION
-app.get('/api/attendance', async (_req, res) => {
+// API route to get attendance history
+app.get('/api/attendance', async (req, res) => {
     if (!deviceInstance) {
         return res.status(503).json({ error: 'Device not connected' });
     }
@@ -227,11 +343,12 @@ app.get('/api/attendance', async (_req, res) => {
     try {
         console.log('Fetching attendance logs from device...');
         
+        // Get date filter from query parameters
+        const filterDate = req.query.date; // Format: YYYY-MM-DD
+        
         let deviceLogs;
-        let methodUsed = 'getAttendances';
         
         try {
-            // Use the correct method: getAttendances
             deviceLogs = await deviceInstance.getAttendances();
             console.log('Successfully fetched logs using getAttendances()');
         } catch (error) {
@@ -239,27 +356,21 @@ app.get('/api/attendance', async (_req, res) => {
             throw new Error(`Failed to fetch attendance: ${error.message}`);
         }
 
-        // Validate the received data
         if (!deviceLogs) {
             console.error('No attendance data received');
             return res.status(500).json({ error: 'No data received from device' });
         }
         
         if (!Array.isArray(deviceLogs)) {
-            console.error('Invalid attendance data format:', typeof deviceLogs);
-            // Sometimes it might be an object, try to extract array
             if (deviceLogs && typeof deviceLogs === 'object') {
                 deviceLogs = Object.values(deviceLogs).find(val => Array.isArray(val)) || [];
             } else {
                 deviceLogs = [];
             }
         }
-        
-        console.log(`Successfully fetched ${deviceLogs.length} attendance records`);
 
         // Process the logs into consistent format
-        const processedLogs = deviceLogs.map((log, index) => {
-            // Parse ZKTeco timestamp format
+        let processedLogs = deviceLogs.map((log, index) => {
             const timestamp = parseZktecoTime(log.record_time);
             const userId = log.user_id || log.userId || 'Unknown';
             
@@ -273,10 +384,17 @@ app.get('/api/attendance', async (_req, res) => {
                 verificationMethod: determineVerificationMethod(log),
                 punchType: determinePunchType(log),
                 deviceIp: DEVICE_IP,
-                methodUsed: methodUsed,
                 rawData: log
             };
         });
+
+        // Filter by date if provided
+        if (filterDate) {
+            processedLogs = processedLogs.filter(log => {
+                const logDate = new Date(log.timestamp).toISOString().split('T')[0];
+                return logDate === filterDate;
+            });
+        }
 
         // Sort by timestamp (newest first)
         processedLogs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
@@ -284,13 +402,12 @@ app.get('/api/attendance', async (_req, res) => {
         // Update global attendance history
         attendanceHistory = processedLogs;
 
-        // Return the attendance data
         res.status(200).json({
             success: true,
             total: processedLogs.length,
             records: processedLogs,
             lastUpdated: new Date().toISOString(),
-            source: methodUsed
+            filterDate: filterDate || 'all'
         });
 
     } catch (error) {
@@ -300,6 +417,43 @@ app.get('/api/attendance', async (_req, res) => {
             details: error.message
         });
     }
+});
+
+// Diagnostic endpoint
+app.get('/api/diagnostic', async (_req, res) => {
+    const diagnostic = {
+        server: {
+            status: 'running',
+            port: EXPRESS_PORT,
+            uptime: process.uptime()
+        },
+        device: {
+            connected: !!deviceInstance,
+            ip: DEVICE_IP,
+            port: DEVICE_PORT
+        },
+        data: {
+            users: usersCache.length,
+            attendance: attendanceHistory.length
+        }
+    };
+
+    if (deviceInstance) {
+        try {
+            // Test basic communication
+            const testUsers = await deviceInstance.getUsers();
+            diagnostic.device.users = Array.isArray(testUsers) ? testUsers.length : 'error';
+            
+            const testAttendance = await deviceInstance.getAttendances();
+            diagnostic.device.attendance = Array.isArray(testAttendance) ? testAttendance.length : 'error';
+            
+            diagnostic.device.status = 'operational';
+        } catch (error) {
+            diagnostic.device.status = 'communication error: ' + error.message;
+        }
+    }
+
+    res.json(diagnostic);
 });
 
 // Handle preflight requests for all routes
@@ -319,6 +473,40 @@ io.on('connection', (socket) => {
             .then(info => socket.emit('device_info', info))
             .catch(error => console.error('Error getting device info:', error));
     }
+
+    // Handle refresh requests from client
+    socket.on('refresh_attendance', async () => {
+        try {
+            if (deviceInstance) {
+                const logs = await deviceInstance.getAttendances();
+                if (logs && Array.isArray(logs)) {
+                    const processedLogs = logs.map((log, index) => {
+                        const timestamp = parseZktecoTime(log.record_time);
+                        const userId = log.user_id || log.userId || 'Unknown';
+                        
+                        return {
+                            id: `att-${timestamp.getTime()}-${index}`,
+                            userId: userId,
+                            userName: findUserName(userId),
+                            timestamp: timestamp.toISOString(),
+                            date: timestamp.toLocaleDateString(),
+                            time: timestamp.toLocaleTimeString(),
+                            verificationMethod: determineVerificationMethod(log),
+                            punchType: determinePunchType(log),
+                            deviceIp: DEVICE_IP,
+                            rawData: log
+                        };
+                    });
+                    
+                    attendanceHistory = processedLogs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                    socket.emit('attendance_history', attendanceHistory);
+                }
+            }
+        } catch (error) {
+            console.error('Error refreshing attendance:', error);
+            socket.emit('error', { message: 'Failed to refresh attendance data' });
+        }
+    });
 
     socket.on('disconnect', () => {
         console.log('A web client disconnected');
@@ -361,7 +549,7 @@ function processAndBroadcastAttendance(logData) {
     io.emit('attendance_history', attendanceHistory);
 }
 
-// ===== DEVICE INITIALIZATION =====
+// ===== ENHANCED DEVICE INITIALIZATION =====
 async function initializeDevice() {
     try {
         if (connectionAttempts >= MAX_RETRIES) {
@@ -391,13 +579,41 @@ async function initializeDevice() {
 
         // Get users and cache them
         const users = await deviceInstance.getUsers();
-        if (!users || !Array.isArray(users)) {
-            console.error('Invalid users data received:', users);
-            usersCache = [];
+        // Handle users data which may be an object or array
+        if (users && typeof users === 'object' && !Array.isArray(users)) {
+            usersCache = Object.values(users).find(val => Array.isArray(val)) || [];
         } else {
-            usersCache = users;
+            usersCache = Array.isArray(users) ? users : [];
         }
         console.log('Total users on device:', usersCache.length);
+
+        // Get initial attendance data
+        try {
+            const attendance = await deviceInstance.getAttendances();
+            if (attendance && Array.isArray(attendance)) {
+                attendanceHistory = attendance.map((log, index) => {
+                    const timestamp = parseZktecoTime(log.record_time);
+                    const userId = log.user_id || log.userId || 'Unknown';
+                    
+                    return {
+                        id: `att-${timestamp.getTime()}-${index}`,
+                        userId: userId,
+                        userName: findUserName(userId),
+                        timestamp: timestamp.toISOString(),
+                        date: timestamp.toLocaleDateString(),
+                        time: timestamp.toLocaleTimeString(),
+                        verificationMethod: determineVerificationMethod(log),
+                        punchType: determinePunchType(log),
+                        deviceIp: DEVICE_IP,
+                        rawData: log
+                    };
+                }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                
+                console.log('Loaded initial attendance records:', attendanceHistory.length);
+            }
+        } catch (error) {
+            console.error('Error loading initial attendance:', error);
+        }
 
         // Set up real-time attendance monitoring
         try {
@@ -411,6 +627,9 @@ async function initializeDevice() {
 
         connectionAttempts = 0; // Reset attempts on successful connection
 
+        // Broadcast connection status
+        io.emit('device_connection', { status: 'connected', message: 'Device connected successfully' });
+
     } catch (error) {
         console.error('Failed to connect to device:', error.message);
         if (deviceInstance) {
@@ -418,6 +637,13 @@ async function initializeDevice() {
             deviceInstance = null;
         }
         connectionAttempts++;
+        
+        // Broadcast connection error
+        io.emit('device_connection', { 
+            status: 'disconnected', 
+            message: `Connection attempt ${connectionAttempts}/${MAX_RETRIES} failed` 
+        });
+        
         console.log(`Connection attempt ${connectionAttempts}/${MAX_RETRIES}. Retrying in 5 seconds...`);
         setTimeout(initializeDevice, 5000);
     }
