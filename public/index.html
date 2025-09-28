@@ -3,603 +3,782 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ZKTeco Attendance System</title>
+    <title>ZKTeco Attendance Monitor</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
-        :root {
-            --primary-color: #3498db;
-            --secondary-color: #2c3e50;
-            --success-color: #2ecc71;
-            --danger-color: #e74c3c;
-            --warning-color: #f39c12;
-            --light-color: #ecf0f1;
-            --dark-color: #34495e;
-        }
-        
         * {
-            box-sizing: border-box;
             margin: 0;
             padding: 0;
+            box-sizing: border-box;
         }
-        
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background-color: #f5f5f5;
-        }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
             padding: 20px;
         }
-        
-        header {
-            background-color: var(--secondary-color);
-            color: white;
-            padding: 1rem;
-            text-align: center;
-            margin-bottom: 20px;
-            border-radius: 5px;
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
         }
-        
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        .header h1 {
+            color: #333;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .header h1 i {
+            color: #667eea;
+        }
+
+        .status-bar {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .status-item {
+            background: #f8f9fa;
+            padding: 10px 15px;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+
+        .status-item.connected {
+            border-left-color: #28a745;
+        }
+
+        .status-item.disconnected {
+            border-left-color: #dc3545;
+        }
+
         .dashboard {
             display: grid;
-            grid-template-columns: 1fr 2fr;
+            grid-template-columns: 1fr 400px;
             gap: 20px;
             margin-bottom: 20px;
         }
-        
-        .card {
-            background: white;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            padding: 20px;
-            margin-bottom: 20px;
+
+        @media (max-width: 1024px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
         }
-        
-        .card-header {
-            border-bottom: 1px solid #eee;
-            padding-bottom: 10px;
-            margin-bottom: 15px;
+
+        .attendance-section {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f1f3f4;
+        }
+
+        .section-header h2 {
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+
+        .attendance-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+        }
+
+        .attendance-table th {
+            background: #667eea;
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        .attendance-table td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #f1f3f4;
+        }
+
+        .attendance-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .attendance-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .badge {
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .badge-warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .badge-info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .badge-primary {
+            background: #cce7ff;
+            color: #004085;
+        }
+
+        .real-time-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #28a745;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.4; }
+            100% { opacity: 1; }
+        }
+
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .users-widget, .device-widget {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        .user-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .user-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
-        }
-        
-        .device-info {
-            background-color: var(--light-color);
-        }
-        
-        .device-info p {
-            margin-bottom: 8px;
-        }
-        
-        .user-form {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-        }
-        
-        .form-group {
-            margin-bottom: 15px;
-        }
-        
-        label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: 600;
-        }
-        
-        input, select {
-            width: 100%;
             padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
+            border-bottom: 1px solid #f1f3f4;
         }
-        
-        button {
-            background-color: var(--primary-color);
-            color: white;
-            border: none;
-            padding: 10px 15px;
-            border-radius: 4px;
-            cursor: pointer;
+
+        .user-item:last-child {
+            border-bottom: none;
+        }
+
+        .user-info {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .user-name {
             font-weight: 600;
+            color: #333;
         }
-        
-        button:hover {
-            opacity: 0.9;
+
+        .user-id {
+            font-size: 12px;
+            color: #666;
         }
-        
-        .btn-danger {
-            background-color: var(--danger-color);
+
+        .device-info-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #f1f3f4;
         }
-        
-        .btn-success {
-            background-color: var(--success-color);
+
+        .device-info-item:last-child {
+            border-bottom: none;
         }
-        
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-        }
-        
-        th, td {
-            padding: 12px 15px;
-            text-align: left;
-            border-bottom: 1px solid #ddd;
-        }
-        
-        th {
-            background-color: var(--light-color);
+
+        .info-label {
             font-weight: 600;
+            color: #555;
         }
-        
-        tr:hover {
-            background-color: #f9f9f9;
+
+        .info-value {
+            color: #333;
         }
-        
-        .attendance-badge {
-            display: inline-block;
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 0.8rem;
-            font-weight: 600;
-        }
-        
-        .check-in {
-            background-color: #e7f4e4;
-            color: #2ecc71;
-        }
-        
-        .check-out {
-            background-color: #ffe8e8;
-            color: #e74c3c;
-        }
-        
-        .verification-method {
-            font-weight: 600;
-            color: var(--primary-color);
-        }
-        
-        .real-time-alert {
+
+        .notification {
             position: fixed;
             top: 20px;
             right: 20px;
-            background-color: white;
-            border-left: 4px solid var(--success-color);
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            padding: 15px;
-            border-radius: 4px;
-            display: none;
+            background: white;
+            padding: 15px 20px;
+            border-radius: 10px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            border-left: 4px solid #28a745;
+            transform: translateX(400px);
+            transition: transform 0.3s ease;
             z-index: 1000;
-            animation: slideIn 0.3s ease;
         }
-        
-        @keyframes slideIn {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
+
+        .notification.show {
+            transform: translateX(0);
         }
-        
-        .tabs {
+
+        .notification.success {
+            border-left-color: #28a745;
+        }
+
+        .notification.error {
+            border-left-color: #dc3545;
+        }
+
+        .notification.warning {
+            border-left-color: #ffc107;
+        }
+
+        .filters {
             display: flex;
+            gap: 10px;
             margin-bottom: 20px;
-            border-bottom: 1px solid #ddd;
+            flex-wrap: wrap;
         }
-        
-        .tab {
-            padding: 10px 20px;
-            cursor: pointer;
-            border-bottom: 3px solid transparent;
+
+        .filter-select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background: white;
+            min-width: 150px;
         }
-        
-        .tab.active {
-            border-bottom-color: var(--primary-color);
-            font-weight: 600;
+
+        .stats-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
         }
-        
-        .tab-content {
-            display: none;
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
         }
-        
-        .tab-content.active {
-            display: block;
+
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+            margin: 10px 0;
         }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .punch-checkin { background: #d4edda; }
+        .punch-checkout { background: #f8d7da; }
+        .punch-break-in { background: #fff3cd; }
+        .punch-break-out { background: #d1ecf1; }
+
+        .verification-fingerprint { color: #28a745; }
+        .verification-card { color: #007bff; }
+        .verification-password { color: #6c757d; }
+        .verification-face { color: #e83e8c; }
     </style>
 </head>
 <body>
-    <header>
-        <h1>ZKTeco Attendance System</h1>
-    </header>
-    
     <div class="container">
-        <div class="tabs">
-            <div class="tab active" data-tab="dashboard">Dashboard</div>
-            <div class="tab" data-tab="users">User Management</div>
-            <div class="tab" data-tab="attendance">Attendance History</div>
+        <!-- Header -->
+        <div class="header">
+            <h1>
+                <i>📊</i> ZKTeco Attendance Monitor
+            </h1>
+            <div class="status-bar">
+                <div class="status-item" id="connectionStatus">
+                    <strong>Device Status:</strong> <span id="statusText">Connecting...</span>
+                </div>
+                <div class="status-item">
+                    <strong>Total Users:</strong> <span id="totalUsers">0</span>
+                </div>
+                <div class="status-item">
+                    <strong>Today's Records:</strong> <span id="todayRecords">0</span>
+                </div>
+                <div class="status-item">
+                    <strong>Last Update:</strong> <span id="lastUpdate">-</span>
+                </div>
+            </div>
         </div>
-        
-        <div class="tab-content active" id="dashboard">
-            <div class="dashboard">
-                <div>
-                    <div class="card device-info">
-                        <div class="card-header">
-                            <h2>Device Information</h2>
-                        </div>
-                        <div id="device-info-content">
-                            <p><strong>Status:</strong> <span id="device-status">Connecting...</span></p>
-                            <p><strong>IP Address:</strong> <span id="device-ip">-</span></p>
-                            <p><strong>Device Name:</strong> <span id="device-name">-</span></p>
-                            <p><strong>Serial Number:</strong> <span id="device-serial">-</span></p>
-                            <p><strong>Platform:</strong> <span id="device-platform">-</span></p>
-                            <p><strong>Firmware:</strong> <span id="device-firmware">-</span></p>
-                        </div>
-                    </div>
-                    
-                    <div class="card">
-                        <div class="card-header">
-                            <h2>Real-time Attendance</h2>
-                        </div>
-                        <div id="realtime-attendance">
-                            <p>Waiting for attendance data...</p>
-                        </div>
+
+        <!-- Statistics Cards -->
+        <div class="stats-cards">
+            <div class="stat-card">
+                <div class="stat-label">Total Attendance</div>
+                <div class="stat-number" id="statTotal">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Check-ins Today</div>
+                <div class="stat-number" id="statCheckins">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Active Now</div>
+                <div class="stat-number" id="statActive">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Fingerprint Auth</div>
+                <div class="stat-number" id="statFingerprint">0</div>
+            </div>
+        </div>
+
+        <!-- Main Dashboard -->
+        <div class="dashboard">
+            <!-- Attendance Section -->
+            <div class="attendance-section">
+                <div class="section-header">
+                    <h2><i>🕒</i> Real-time Attendance</h2>
+                    <div class="controls">
+                        <button class="btn btn-primary" onclick="refreshAttendance()">Refresh</button>
+                        <button class="btn btn-success" onclick="exportData()">Export</button>
+                        <button class="btn btn-danger" onclick="clearFilters()">Clear Filters</button>
                     </div>
                 </div>
-                
-                <div class="card">
-                    <div class="card-header">
-                        <h2>Recent Attendance Records</h2>
-                    </div>
-                    <table>
+
+                <!-- Filters -->
+                <div class="filters">
+                    <select class="filter-select" id="userFilter" onchange="applyFilters()">
+                        <option value="">All Users</option>
+                    </select>
+                    <select class="filter-select" id="punchTypeFilter" onchange="applyFilters()">
+                        <option value="">All Punch Types</option>
+                        <option value="Check-in">Check-in</option>
+                        <option value="Check-out">Check-out</option>
+                        <option value="Break-in">Break-in</option>
+                        <option value="Break-out">Break-out</option>
+                    </select>
+                    <select class="filter-select" id="verificationFilter" onchange="applyFilters()">
+                        <option value="">All Methods</option>
+                        <option value="Fingerprint">Fingerprint</option>
+                        <option value="Card">Card</option>
+                        <option value="Face">Face</option>
+                        <option value="Password">Password</option>
+                    </select>
+                    <input type="date" class="filter-select" id="dateFilter" onchange="applyFilters()">
+                </div>
+
+                <!-- Attendance Table -->
+                <div style="overflow-x: auto;">
+                    <table class="attendance-table" id="attendanceTable">
                         <thead>
                             <tr>
-                                <th>User</th>
                                 <th>Time</th>
-                                <th>Type</th>
+                                <th>User</th>
+                                <th>Punch Type</th>
                                 <th>Method</th>
+                                <th>Device</th>
+                                <th>Status</th>
                             </tr>
                         </thead>
-                        <tbody id="attendance-table-body">
+                        <tbody id="attendanceBody">
                             <tr>
-                                <td colspan="4" style="text-align: center;">No attendance records yet</td>
+                                <td colspan="6" class="loading">Loading attendance data...</td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
             </div>
-        </div>
-        
-        <div class="tab-content" id="users">
-            <div class="card">
-                <div class="card-header">
-                    <h2>User Management</h2>
-                    <button id="refresh-users">Refresh Users</button>
-                </div>
-                <div class="user-form">
-                    <div>
-                        <h3>Add New User</h3>
-                        <form id="add-user-form">
-                            <div class="form-group">
-                                <label for="userId">User ID</label>
-                                <input type="number" id="userId" required>
-                            </div>
-                            <div class="form-group">
-                                <label for="name">Name</label>
-                                <input type="text" id="name" required>
-                            </div>
-                            <div class="form-group">
-                                <label for="cardNumber">Card Number</label>
-                                <input type="number" id="cardNumber">
-                            </div>
-                            <div class="form-group">
-                                <label for="role">Role</label>
-                                <select id="role">
-                                    <option value="0">User</option>
-                                    <option value="1">Admin</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label for="password">Password</label>
-                                <input type="password" id="password">
-                            </div>
-                            <button type="submit" class="btn-success">Add User</button>
-                        </form>
+
+            <!-- Sidebar -->
+            <div class="sidebar">
+                <!-- Users Widget -->
+                <div class="users-widget">
+                    <div class="section-header">
+                        <h2><i>👥</i> Users</h2>
+                        <span class="badge badge-primary" id="usersCount">0</span>
                     </div>
-                    
-                    <div>
-                        <h3>Device Users</h3>
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>ID</th>
-                                    <th>Name</th>
-                                    <th>Role</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="users-table-body">
-                                <tr>
-                                    <td colspan="4" style="text-align: center;">Loading users...</td>
-                                </tr>
-                            </tbody>
-                        </table>
+                    <div class="user-list" id="userList">
+                        <div class="loading">Loading users...</div>
                     </div>
                 </div>
-            </div>
-        </div>
-        
-        <div class="tab-content" id="attendance">
-            <div class="card">
-                <div class="card-header">
-                    <h2>Attendance History</h2>
-                    <button id="export-attendance">Export CSV</button>
+
+                <!-- Device Info Widget -->
+                <div class="device-widget">
+                    <div class="section-header">
+                        <h2><i>⚙️</i> Device Info</h2>
+                    </div>
+                    <div id="deviceInfo">
+                        <div class="loading">Loading device information...</div>
+                    </div>
                 </div>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>User ID</th>
-                            <th>Name</th>
-                            <th>Date & Time</th>
-                            <th>Type</th>
-                            <th>Method</th>
-                        </tr>
-                    </thead>
-                    <tbody id="attendance-history-body">
-                        <tr>
-                            <td colspan="5" style="text-align: center;">Loading attendance history...</td>
-                        </tr>
-                    </tbody>
-                </table>
             </div>
         </div>
     </div>
-    
-    <div class="real-time-alert" id="realtime-alert"></div>
+
+    <!-- Notification -->
+    <div class="notification" id="notification">
+        <div id="notificationMessage"></div>
+    </div>
 
     <script>
+        // Socket.IO connection
         const socket = io();
-        const attendanceTableBody = document.getElementById('attendance-table-body');
-        const attendanceHistoryBody = document.getElementById('attendance-history-body');
-        const usersTableBody = document.getElementById('users-table-body');
-        const realtimeAttendance = document.getElementById('realtime-attendance');
-        const realtimeAlert = document.getElementById('realtime-alert');
-        
-        // Device info elements
-        const deviceStatus = document.getElementById('device-status');
-        const deviceIp = document.getElementById('device-ip');
-        const deviceName = document.getElementById('device-name');
-        const deviceSerial = document.getElementById('device-serial');
-        const devicePlatform = document.getElementById('device-platform');
-        const deviceFirmware = document.getElementById('device-firmware');
-        
-        // Tab functionality
-        document.querySelectorAll('.tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-                
-                tab.classList.add('active');
-                document.getElementById(tab.dataset.tab).classList.add('active');
+
+        // Global variables
+        let attendanceData = [];
+        let usersData = [];
+        let deviceInfo = {};
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            connectToSocket();
+            setupEventListeners();
+        });
+
+        function connectToSocket() {
+            socket.on('connect', () => {
+                showNotification('Connected to server', 'success');
+                updateConnectionStatus('Connected', 'connected');
             });
-        });
-        
-        // Listen for device info
-        socket.on('device_info', (info) => {
-            deviceStatus.textContent = 'Connected';
-            deviceStatus.style.color = 'green';
-            
-            if (info.ip) deviceIp.textContent = info.ip;
-            if (info.deviceName) deviceName.textContent = info.deviceName;
-            if (info.serialNumber) deviceSerial.textContent = info.serialNumber;
-            if (info.platform) devicePlatform.textContent = info.platform;
-            if (info.firmwareVersion) deviceFirmware.textContent = info.firmwareVersion;
-        });
-        
-        // Listen for users data
-        socket.on('users_data', (users) => {
-            updateUsersTable(users);
-        });
-        
-        // Listen for attendance history
-        socket.on('attendance_history', (history) => {
-            updateAttendanceTable(history.slice(0, 10), attendanceTableBody);
-            updateAttendanceTable(history, attendanceHistoryBody);
-        });
-        
-        // Listen for real-time attendance records
-        socket.on('attendance_record', (record) => {
-            // Show real-time alert
-            realtimeAlert.innerHTML = `
-                <strong>${record.userName || 'Unknown User'}</strong> 
-                <span class="attendance-badge ${record.punchType.toLowerCase().includes('in') ? 'check-in' : 'check-out'}">
-                    ${record.punchType}
-                </span>
-                <p>at ${new Date(record.timestamp).toLocaleTimeString()} via ${record.verificationMethod}</p>
-            `;
-            realtimeAlert.style.display = 'block';
-            
-            // Hide alert after 5 seconds
-            setTimeout(() => {
-                realtimeAlert.style.display = 'none';
-            }, 5000);
-            
-            // Update the real-time attendance section
-            realtimeAttendance.innerHTML = `
-                <p><strong>User:</strong> ${record.userName || 'Unknown'} (ID: ${record.userId})</p>
-                <p><strong>Time:</strong> ${new Date(record.timestamp).toLocaleString()}</p>
-                <p><strong>Type:</strong> <span class="attendance-badge ${record.punchType.toLowerCase().includes('in') ? 'check-in' : 'check-out'}">${record.punchType}</span></p>
-                <p><strong>Method:</strong> <span class="verification-method">${record.verificationMethod}</span></p>
-            `;
-        });
-        
-        // Update users table
-        function updateUsersTable(users) {
-            if (users.length === 0) {
-                usersTableBody.innerHTML = '<tr><td colspan="4" style="text-align: center;">No users found</td></tr>';
-                return;
-            }
-            
-            usersTableBody.innerHTML = users.map(user => `
-                <tr>
-                    <td>${user.userId}</td>
-                    <td>${user.name}</td>
-                    <td>${user.role === 1 ? 'Admin' : 'User'}</td>
-                    <td>
-                        <button class="btn-danger" onclick="deleteUser(${user.userId})">Delete</button>
-                    </td>
-                </tr>
-            `).join('');
+
+            socket.on('disconnect', () => {
+                showNotification('Disconnected from server', 'error');
+                updateConnectionStatus('Disconnected', 'disconnected');
+            });
+
+            // Listen for real-time attendance
+            socket.on('attendance_record', (record) => {
+                addAttendanceRecord(record);
+                showNewRecordNotification(record);
+                updateStats();
+            });
+
+            // Listen for attendance history
+            socket.on('attendance_history', (history) => {
+                attendanceData = history;
+                renderAttendanceTable();
+                updateStats();
+                populateUserFilter();
+            });
+
+            // Listen for users data
+            socket.on('users_data', (users) => {
+                usersData = users;
+                renderUserList();
+                updateUserCount();
+                populateUserFilter();
+            });
+
+            // Listen for device info
+            socket.on('device_info', (info) => {
+                deviceInfo = info;
+                renderDeviceInfo();
+            });
         }
-        
-        // Update attendance table
-        function updateAttendanceTable(records, tableBody) {
-            if (records.length === 0) {
-                tableBody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No attendance records found</td></tr>';
+
+        function setupEventListeners() {
+            // Auto-refresh every 30 seconds
+            setInterval(refreshAttendance, 30000);
+            
+            // Update time every second
+            setInterval(updateTime, 1000);
+        }
+
+        function renderAttendanceTable() {
+            const tbody = document.getElementById('attendanceBody');
+            const filteredData = getFilteredData();
+
+            if (filteredData.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="loading">No attendance records found</td></tr>';
                 return;
             }
-            
-            tableBody.innerHTML = records.map(record => `
-                <tr>
-                    <td>${record.userId}</td>
-                    <td>${record.userName || 'Unknown'}</td>
-                    <td>${new Date(record.timestamp).toLocaleString()}</td>
+
+            tbody.innerHTML = filteredData.map(record => `
+                <tr class="punch-${record.punchType.toLowerCase().replace('-', '')}">
                     <td>
-                        <span class="attendance-badge ${record.punchType.toLowerCase().includes('in') ? 'check-in' : 'check-out'}">
+                        <div>${formatTime(record.timestamp)}</div>
+                        <small style="color: #666;">${formatDate(record.timestamp)}</small>
+                    </td>
+                    <td>
+                        <div class="user-name">${record.userName}</div>
+                        <small class="user-id">ID: ${record.userId}</small>
+                    </td>
+                    <td>
+                        <span class="badge badge-${getPunchTypeBadge(record.punchType)}">
                             ${record.punchType}
                         </span>
                     </td>
-                    <td>${record.verificationMethod}</td>
+                    <td>
+                        <span class="verification-${record.verificationMethod.toLowerCase()}">
+                            ${record.verificationMethod}
+                        </span>
+                    </td>
+                    <td>${record.deviceIp}</td>
+                    <td>
+                        ${record === attendanceData[0] ? '<span class="real-time-indicator"></span> Live' : ''}
+                    </td>
                 </tr>
             `).join('');
         }
-        
-        // Add user form submission
-        document.getElementById('add-user-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const userData = {
-                userId: parseInt(document.getElementById('userId').value),
-                name: document.getElementById('name').value,
-                cardNumber: document.getElementById('cardNumber').value ? parseInt(document.getElementById('cardNumber').value) : 0,
-                role: parseInt(document.getElementById('role').value),
-                password: document.getElementById('password').value
-            };
-            
-            try {
-                const response = await fetch('/api/users', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(userData)
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    alert('User added successfully!');
-                    document.getElementById('add-user-form').reset();
-                    // Refresh users list
-                    fetchUsers();
-                } else {
-                    alert('Error: ' + result.error);
-                }
-            } catch (error) {
-                console.error('Error adding user:', error);
-                alert('Failed to add user');
+
+        function addAttendanceRecord(record) {
+            attendanceData.unshift(record);
+            if (attendanceData.length > 1000) {
+                attendanceData = attendanceData.slice(0, 1000);
             }
-        });
-        
-        // Delete user function
-        window.deleteUser = async (userId) => {
-            if (!confirm('Are you sure you want to delete this user?')) return;
+            renderAttendanceTable();
+        }
+
+        function renderUserList() {
+            const userList = document.getElementById('userList');
             
-            try {
-                const response = await fetch(`/api/users/${userId}`, {
-                    method: 'DELETE'
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    alert('User deleted successfully!');
-                    // Refresh users list
-                    fetchUsers();
-                } else {
-                    alert('Error: ' + result.error);
-                }
-            } catch (error) {
-                console.error('Error deleting user:', error);
-                alert('Failed to delete user');
+            if (usersData.length === 0) {
+                userList.innerHTML = '<div class="loading">No users found</div>';
+                return;
             }
-        };
-        
-        // Refresh users button
-        document.getElementById('refresh-users').addEventListener('click', () => {
-            fetchUsers();
-        });
-        
-        // Export attendance button
-        document.getElementById('export-attendance').addEventListener('click', () => {
-            exportToCSV();
-        });
-        
-        // Fetch users from server
-        async function fetchUsers() {
-            try {
-                const response = await fetch('/api/users');
-                const users = await response.json();
-                updateUsersTable(users);
-            } catch (error) {
-                console.error('Error fetching users:', error);
+
+            userList.innerHTML = usersData.slice(0, 10).map(user => `
+                <div class="user-item">
+                    <div class="user-info">
+                        <div class="user-name">${user.name || 'Unknown'}</div>
+                        <div class="user-id">ID: ${user.userId || user.id}</div>
+                    </div>
+                </div>
+            `).join('');
+
+            if (usersData.length > 10) {
+                userList.innerHTML += `<div style="text-align: center; padding: 10px; color: #666;">
+                    +${usersData.length - 10} more users
+                </div>`;
             }
         }
-        
-        // Export to CSV function
-        function exportToCSV() {
-            const rows = [['User ID', 'Name', 'Date & Time', 'Type', 'Method']];
+
+        function renderDeviceInfo() {
+            const deviceInfoDiv = document.getElementById('deviceInfo');
             
-            // Get all attendance records from the table
-            const rowsEl = attendanceHistoryBody.querySelectorAll('tr');
-            rowsEl.forEach(row => {
-                const cols = row.querySelectorAll('td');
-                if (cols.length >= 5) {
-                    rows.push([
-                        cols[0].textContent,
-                        cols[1].textContent,
-                        cols[2].textContent,
-                        cols[3].querySelector('.attendance-badge')?.textContent || '',
-                        cols[4].textContent
-                    ]);
-                }
+            deviceInfoDiv.innerHTML = `
+                <div class="device-info-item">
+                    <span class="info-label">IP Address:</span>
+                    <span class="info-value">${deviceInfo.ip || 'N/A'}</span>
+                </div>
+                <div class="device-info-item">
+                    <span class="info-label">Model:</span>
+                    <span class="info-value">${deviceInfo.deviceName || 'N/A'}</span>
+                </div>
+                <div class="device-info-item">
+                    <span class="info-label">Serial No:</span>
+                    <span class="info-value">${deviceInfo.serialNumber || 'N/A'}</span>
+                </div>
+                <div class="device-info-item">
+                    <span class="info-label">Firmware:</span>
+                    <span class="info-value">${deviceInfo.firmwareVersion || 'N/A'}</span>
+                </div>
+                <div class="device-info-item">
+                    <span class="info-label">Platform:</span>
+                    <span class="info-value">${deviceInfo.platform || 'N/A'}</span>
+                </div>
+            `;
+        }
+
+        function updateStats() {
+            const today = new Date().toDateString();
+            const todayRecords = attendanceData.filter(record => 
+                new Date(record.timestamp).toDateString() === today
+            );
+            
+            const checkins = todayRecords.filter(record => record.punchType === 'Check-in').length;
+            const fingerprintAuth = attendanceData.filter(record => 
+                record.verificationMethod === 'Fingerprint'
+            ).length;
+
+            document.getElementById('statTotal').textContent = attendanceData.length;
+            document.getElementById('statCheckins').textContent = checkins;
+            document.getElementById('statActive').textContent = todayRecords.length;
+            document.getElementById('statFingerprint').textContent = fingerprintAuth;
+            document.getElementById('todayRecords').textContent = todayRecords.length;
+            document.getElementById('totalUsers').textContent = usersData.length;
+        }
+
+        function updateConnectionStatus(status, className) {
+            const statusElement = document.getElementById('connectionStatus');
+            const statusText = document.getElementById('statusText');
+            
+            statusText.textContent = status;
+            statusElement.className = `status-item ${className}`;
+        }
+
+        function updateTime() {
+            document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+        }
+
+        function populateUserFilter() {
+            const userFilter = document.getElementById('userFilter');
+            const uniqueUsers = [...new Set(usersData.map(user => user.name || `User ${user.userId}`))];
+            
+            userFilter.innerHTML = '<option value="">All Users</option>' +
+                uniqueUsers.map(user => `<option value="${user}">${user}</option>`).join('');
+        }
+
+        function getFilteredData() {
+            const userFilter = document.getElementById('userFilter').value;
+            const punchTypeFilter = document.getElementById('punchTypeFilter').value;
+            const verificationFilter = document.getElementById('verificationFilter').value;
+            const dateFilter = document.getElementById('dateFilter').value;
+
+            return attendanceData.filter(record => {
+                const recordDate = new Date(record.timestamp).toISOString().split('T')[0];
+                
+                return (!userFilter || record.userName === userFilter) &&
+                       (!punchTypeFilter || record.punchType === punchTypeFilter) &&
+                       (!verificationFilter || record.verificationMethod === verificationFilter) &&
+                       (!dateFilter || recordDate === dateFilter);
             });
-            
-            const csvContent = rows.map(row => row.join(',')).join('\n');
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.setAttribute('href', url);
-            link.setAttribute('download', 'attendance_history.csv');
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
         }
-        
-        // Initialize
-        fetchUsers();
-        
-        // Fetch attendance history
-        fetch('/api/attendance')
-            .then(response => response.json())
-            .then(data => {
-                updateAttendanceTable(data.slice(0, 10), attendanceTableBody);
-                updateAttendanceTable(data, attendanceHistoryBody);
-            })
-            .catch(error => console.error('Error fetching attendance:', error));
+
+        function applyFilters() {
+            renderAttendanceTable();
+        }
+
+        function clearFilters() {
+            document.getElementById('userFilter').value = '';
+            document.getElementById('punchTypeFilter').value = '';
+            document.getElementById('verificationFilter').value = '';
+            document.getElementById('dateFilter').value = '';
+            renderAttendanceTable();
+        }
+
+        function refreshAttendance() {
+            showNotification('Refreshing attendance data...', 'warning');
+            // You can trigger a refresh via Socket.IO or API call
+            socket.emit('refresh_attendance');
+        }
+
+        function exportData() {
+            const dataStr = JSON.stringify(attendanceData, null, 2);
+            const dataBlob = new Blob([dataStr], {type: 'application/json'});
+            const url = URL.createObjectURL(dataBlob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `attendance_data_${new Date().toISOString().split('T')[0]}.json`;
+            link.click();
+            URL.revokeObjectURL(url);
+            showNotification('Data exported successfully', 'success');
+        }
+
+        function showNotification(message, type = 'success') {
+            const notification = document.getElementById('notification');
+            const messageDiv = document.getElementById('notificationMessage');
+            
+            messageDiv.textContent = message;
+            notification.className = `notification ${type} show`;
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 3000);
+        }
+
+        function showNewRecordNotification(record) {
+            showNotification(`${record.userName} - ${record.punchType} (${record.verificationMethod})`, 'success');
+        }
+
+        function formatTime(timestamp) {
+            return new Date(timestamp).toLocaleTimeString();
+        }
+
+        function formatDate(timestamp) {
+            return new Date(timestamp).toLocaleDateString();
+        }
+
+        function getPunchTypeBadge(punchType) {
+            switch(punchType) {
+                case 'Check-in': return 'success';
+                case 'Check-out': return 'danger';
+                case 'Break-in': return 'warning';
+                case 'Break-out': return 'info';
+                default: return 'primary';
+            }
+        }
+
+        function updateUserCount() {
+            document.getElementById('usersCount').textContent = usersData.length;
+        }
     </script>
 </body>
 </html>

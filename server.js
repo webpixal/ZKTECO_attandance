@@ -22,7 +22,7 @@ const io = new Server(server, {
 });
 
 const EXPRESS_PORT = process.env.EXPRESS_PORT || 3000;
-const DEVICE_IP = '192.168.159.201';
+const DEVICE_IP = '118.179.40.236';
 const DEVICE_PORT = 4370;
 const CONNECTION_TIMEOUT = 5000; // 5 seconds timeout
 const MAX_RETRIES = 5;
@@ -36,73 +36,17 @@ let attendanceHistory = []; // Store attendance history
 app.use(express.json());
 app.use(express.static('public')); // Serve static files
 
-// ===== DEBUG ENDPOINT =====
-app.get('/api/debug-methods', async (_req, res) => {
-    if (!deviceInstance) {
-        return res.status(503).json({ error: 'Device not connected' });
-    }
-    
-    try {
-        // Get all properties of the device instance
-        const allProperties = Object.getOwnPropertyNames(deviceInstance);
-        const prototypeMethods = Object.getOwnPropertyNames(Object.getPrototypeOf(deviceInstance));
-        
-        // Filter only functions
-        const instanceMethods = allProperties.filter(prop => typeof deviceInstance[prop] === 'function');
-        const prototypeFunctions = prototypeMethods.filter(prop => typeof deviceInstance[prop] === 'function');
-        
-        // Combine and remove duplicates
-        const allMethods = [...new Set([...instanceMethods, ...prototypeFunctions])].sort();
-        
-        console.log('All available methods:', allMethods);
-        
-        // Try to get device info to test connection
-        let deviceInfo;
-        try {
-            deviceInfo = await deviceInstance.getInfo();
-        } catch (error) {
-            deviceInfo = { error: error.message };
-        }
-        
-        // Try to get users to test user methods
-        let users;
-        try {
-            users = await deviceInstance.getUsers();
-            users = { count: users.length, sample: users[0] };
-        } catch (error) {
-            users = { error: error.message };
-        }
-        
-        res.status(200).json({
-            availableMethods: allMethods,
-            deviceConnected: true,
-            deviceInfo: deviceInfo,
-            usersTest: users,
-            connectionInfo: {
-                ip: DEVICE_IP,
-                port: DEVICE_PORT,
-                attempts: connectionAttempts
-            }
-        });
-    } catch (error) {
-        res.status(500).json({ 
-            error: 'Failed to debug methods',
-            details: error.message 
-        });
-    }
-});
-
 // ===== HELPER FUNCTIONS =====
 function findUserName(userId) {
     if (!usersCache || !Array.isArray(usersCache)) return 'Unknown';
-    const user = usersCache.find(u => u.userId === userId || u.id === userId);
+    const user = usersCache.find(u => u.userId == userId || u.id == userId);
     return user ? user.name : 'Unknown';
 }
 
 function determineVerificationMethod(logData) {
     if (!logData) return 'Unknown';
     
-    const verificationType = logData.verificationType || logData.verifyType || logData.verification;
+    const verificationType = logData.type; // ZKTeco uses 'type' field
     
     switch (verificationType) {
         case 0: return 'Password';
@@ -118,7 +62,7 @@ function determineVerificationMethod(logData) {
 function determinePunchType(logData) {
     if (!logData) return 'Unknown';
     
-    const status = logData.status || logData.punch;
+    const status = logData.state; // ZKTeco uses 'state' field
     
     switch (status) {
         case 0: return 'Check-in';
@@ -128,6 +72,21 @@ function determinePunchType(logData) {
         case 4: return 'Overtime-in';
         case 5: return 'Overtime-out';
         default: return 'Unknown';
+    }
+}
+
+// Function to parse ZKTeco record_time format
+function parseZktecoTime(recordTime) {
+    if (!recordTime) return new Date();
+    
+    // Handle the format: "Sun Sep 28 2025 11:57:56 GMT+0600 (Bangladesh Standard Time)"
+    try {
+        // Extract the main date part before the timezone
+        const datePart = recordTime.split(' GMT')[0];
+        return new Date(datePart);
+    } catch (error) {
+        console.error('Error parsing date:', recordTime, error);
+        return new Date();
     }
 }
 
@@ -173,7 +132,93 @@ app.get('/api/users', async (_req, res) => {
     }
 });
 
-// API route to get attendance history - UPDATED WITH PROPER METHOD DETECTION
+// API route to add a new user
+app.post('/api/users', async (req, res) => {
+    if (!deviceInstance) {
+        return res.status(503).json({ error: 'Device not connected' });
+    }
+    try {
+        const { userId, name, cardNumber, role, password } = req.body;
+        
+        // Create user object based on device requirements
+        const user = {
+            userId: parseInt(userId),
+            name: name,
+            cardNumber: cardNumber || 0,
+            role: role || 0,
+            password: password || ""
+        };
+        
+        const result = await deviceInstance.setUser(user);
+        console.log('User added:', result);
+        
+        // Refresh users cache
+        usersCache = await deviceInstance.getUsers();
+        
+        res.status(201).json({ message: 'User added successfully', user: user });
+    } catch (error) {
+        console.error('Error adding user:', error);
+        res.status(500).json({ error: 'Failed to add user to device' });
+    }
+});
+
+// API route to update a user
+app.put('/api/users/:userId', async (req, res) => {
+    if (!deviceInstance) {
+        return res.status(503).json({ error: 'Device not connected' });
+    }
+    try {
+        const userId = parseInt(req.params.userId);
+        const { name, cardNumber, role, password } = req.body;
+        
+        // Find the user first
+        const users = await deviceInstance.getUsers();
+        const user = users.find(u => u.userId === userId);
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        // Update user properties
+        if (name) user.name = name;
+        if (cardNumber) user.cardNumber = cardNumber;
+        if (role) user.role = role;
+        if (password) user.password = password;
+        
+        const result = await deviceInstance.setUser(user);
+        console.log('User updated:', result);
+        
+        // Refresh users cache
+        usersCache = await deviceInstance.getUsers();
+        
+        res.status(200).json({ message: 'User updated successfully', user: user });
+    } catch (error) {
+        console.error('Error updating user:', error);
+        res.status(500).json({ error: 'Failed to update user on device' });
+    }
+});
+
+// API route to delete a user
+app.delete('/api/users/:userId', async (req, res) => {
+    if (!deviceInstance) {
+        return res.status(503).json({ error: 'Device not connected' });
+    }
+    try {
+        const userId = parseInt(req.params.userId);
+        const result = await deviceInstance.deleteUser(userId);
+        console.log('User deleted:', result);
+        
+        // Refresh users cache
+        usersCache = await deviceInstance.getUsers();
+        
+        res.status(200).json({ message: 'User deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting user:', error);
+        res.status(500).json({ error: 'Failed to delete user from device' });
+    }
+});
+
+// API route to get attendance history - CORRECTED VERSION
 app.get('/api/attendance', async (_req, res) => {
     if (!deviceInstance) {
         return res.status(503).json({ error: 'Device not connected' });
@@ -183,54 +228,15 @@ app.get('/api/attendance', async (_req, res) => {
         console.log('Fetching attendance logs from device...');
         
         let deviceLogs;
-        let methodUsed = 'unknown';
+        let methodUsed = 'getAttendances';
         
-        // Check what methods are actually available
-        const availableMethods = Object.getOwnPropertyNames(deviceInstance).filter(prop => 
-            typeof deviceInstance[prop] === 'function'
-        );
-        
-        console.log('Available methods for attendance:', availableMethods.filter(m => 
-            m.toLowerCase().includes('log') || 
-            m.toLowerCase().includes('attendance') ||
-            m.toLowerCase().includes('data')
-        ));
-
-        // Try different possible method names for attendance
-        const possibleMethods = [
-            'getAttLogs', 'getAttendance', 'getLogs', 'getAttendances', 
-            'getAttendanceData', 'getLogData', 'getAllLogs'
-        ];
-
-        for (const method of possibleMethods) {
-            if (typeof deviceInstance[method] === 'function') {
-                try {
-                    console.log(`Trying method: ${method}`);
-                    deviceLogs = await deviceInstance[method]();
-                    methodUsed = method;
-                    console.log(`Successfully fetched logs using ${method}`);
-                    break;
-                } catch (error) {
-                    console.log(`Method ${method} failed:`, error.message);
-                    continue;
-                }
-            }
-        }
-
-        // If no standard method worked, try real-time logs approach
-        if (!deviceLogs) {
-            console.log('No standard attendance method worked, checking real-time capabilities...');
-            
-            // For some ZKTeco devices, you need to use real-time logs and collect them over time
-            // We'll return the history we've collected so far
-            return res.status(200).json({
-                success: true,
-                total: attendanceHistory.length,
-                records: attendanceHistory,
-                lastUpdated: new Date().toISOString(),
-                source: 'real_time_history',
-                note: 'This device may not support direct attendance log retrieval. Data shown is from real-time monitoring.'
-            });
+        try {
+            // Use the correct method: getAttendances
+            deviceLogs = await deviceInstance.getAttendances();
+            console.log('Successfully fetched logs using getAttendances()');
+        } catch (error) {
+            console.error('Error fetching attendance with getAttendances:', error);
+            throw new Error(`Failed to fetch attendance: ${error.message}`);
         }
 
         // Validate the received data
@@ -249,25 +255,13 @@ app.get('/api/attendance', async (_req, res) => {
             }
         }
         
-        console.log(`Successfully fetched ${deviceLogs.length} attendance records using ${methodUsed}`);
+        console.log(`Successfully fetched ${deviceLogs.length} attendance records`);
 
         // Process the logs into consistent format
         const processedLogs = deviceLogs.map((log, index) => {
-            // Handle different timestamp formats
-            let timestamp;
-            if (log.timestamp) {
-                timestamp = new Date(log.timestamp);
-            } else if (log.recordTime) {
-                timestamp = new Date(log.recordTime);
-            } else if (log.time) {
-                timestamp = new Date(log.time);
-            } else if (log.date) {
-                timestamp = new Date(log.date);
-            } else {
-                timestamp = new Date(); // Fallback to current time
-            }
-
-            const userId = log.uid || log.userId || log.id || 'Unknown';
+            // Parse ZKTeco timestamp format
+            const timestamp = parseZktecoTime(log.record_time);
+            const userId = log.user_id || log.userId || 'Unknown';
             
             return {
                 id: `att-${timestamp.getTime()}-${index}`,
@@ -288,7 +282,7 @@ app.get('/api/attendance', async (_req, res) => {
         processedLogs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
         // Update global attendance history
-        attendanceHistory = [...processedLogs, ...attendanceHistory].slice(0, 1000);
+        attendanceHistory = processedLogs;
 
         // Return the attendance data
         res.status(200).json({
@@ -296,16 +290,14 @@ app.get('/api/attendance', async (_req, res) => {
             total: processedLogs.length,
             records: processedLogs,
             lastUpdated: new Date().toISOString(),
-            source: methodUsed,
-            methodUsed: methodUsed
+            source: methodUsed
         });
 
     } catch (error) {
         console.error('Error fetching attendance:', error);
         res.status(500).json({ 
             error: 'Failed to fetch attendance data',
-            details: error.message,
-            suggestion: 'Use /api/debug-methods endpoint to see available methods'
+            details: error.message
         });
     }
 });
@@ -339,19 +331,9 @@ function processAndBroadcastAttendance(logData) {
     
     if (!logData) return;
     
-    // Handle timestamp
-    let timestamp;
-    if (logData.timestamp) {
-        timestamp = new Date(logData.timestamp);
-    } else if (logData.recordTime) {
-        timestamp = new Date(logData.recordTime);
-    } else if (logData.time) {
-        timestamp = new Date(logData.time);
-    } else {
-        timestamp = new Date();
-    }
-
-    const userId = logData.uid || logData.userId || 'Unknown';
+    // Parse ZKTeco timestamp format for real-time data
+    const timestamp = parseZktecoTime(logData.record_time);
+    const userId = logData.user_id || logData.userId || 'Unknown';
     
     const attendanceRecord = {
         id: `realtime-${timestamp.getTime()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -417,12 +399,6 @@ async function initializeDevice() {
         }
         console.log('Total users on device:', usersCache.length);
 
-        // Debug: Log all available methods
-        const allMethods = Object.getOwnPropertyNames(deviceInstance).filter(prop => 
-            typeof deviceInstance[prop] === 'function'
-        );
-        console.log('All available device methods:', allMethods);
-
         // Set up real-time attendance monitoring
         try {
             await deviceInstance.getRealTimeLogs((realTimeLog) => {
@@ -451,7 +427,6 @@ async function initializeDevice() {
 server.listen(EXPRESS_PORT, () => {
     console.log(`Server running on port ${EXPRESS_PORT}`);
     console.log(`Attempting to connect to ZKTeco device at ${DEVICE_IP}:${DEVICE_PORT}`);
-    console.log(`Debug endpoint available at: http://localhost:${EXPRESS_PORT}/api/debug-methods`);
     initializeDevice();
 });
 
