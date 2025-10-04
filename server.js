@@ -21,51 +21,222 @@ const io = new Server(server, {
     }
 });
 
-const EXPRESS_PORT = process.env.EXPRESS_PORT || 3500;
+const EXPRESS_PORT = process.env.EXPRESS_PORT || 3000;
 const DEVICE_IP = '118.179.40.236';
 const DEVICE_PORT = 4370;
 const CONNECTION_TIMEOUT = 5000;
 const MAX_RETRIES = 5;
 
-// External API Configuration with enhanced settings
+// ===== SIMPLIFIED RUSH HANDLING CONFIGURATION =====
+const RUSH_HANDLING_CONFIG = {
+    enabled: true,
+    maxConcurrentPushes: 3,
+    queueSize: 500,
+    processingDelay: 50,
+    batchSize: 5,
+    retryStrategy: {
+        maxRetries: 2,
+        baseDelay: 1000,
+        maxDelay: 5000
+    }
+};
+
+// External API Configuration
 const EXTERNAL_API_CONFIG = {
     enabled: true,
     url: 'https://laureates.aljaami.co.uk/api/pop.php',
-    maxRetries: 3,
-    retryDelay: 2000,
-    timeout: 10000
+    timeout: 8000
 };
+
+// ===== POLLING CONFIGURATION =====
+const POLLING_CONFIG = {
+    enabled: true, // Enable polling as fallback
+    interval: 3000, // Poll every 3 seconds
+    maxRecordsPerPoll: 10 // Get last 10 records each poll
+};
+
+// ===== SIMPLIFIED RUSH HANDLING =====
+const rushHandlingStats = {
+    totalProcessed: 0,
+    totalQueued: 0,
+    totalDropped: 0,
+    totalErrors: 0,
+    queueLength: 0,
+    concurrentPushes: 0
+};
+
+const pushQueue = [];
+let isProcessingQueue = false;
+let concurrentPushCount = 0;
 
 // Track push statistics
 const pushStatistics = {
     totalPushes: 0,
     successfulPushes: 0,
     failedPushes: 0,
-    lastPush: null,
-    lastSuccess: null,
-    lastError: null
+    lastPush: null
 };
 
 let deviceInstance;
 let connectionAttempts = 0;
 let usersCache = [];
 let attendanceHistory = [];
+let lastPolledTimestamp = new Date(); // Track last poll time
+let realTimeListenersActive = false;
 
 // Middleware
 app.use(express.json());
 app.use(express.static('public'));
 
-// ===== ENHANCED HELPER FUNCTIONS =====
-function decodeDeviceString(str) {
-    if (!str || typeof str !== 'string') return 'Unknown';
+// ===== SIMPLIFIED QUEUE PROCESSING =====
+
+/**
+ * Add record to processing queue
+ */
+function addToProcessingQueue(attendanceRecord) {
+    const queueItem = {
+        id: `queue-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        record: attendanceRecord,
+        timestamp: new Date().toISOString(),
+        attemptCount: 0
+    };
+
+    // Check queue size limit
+    if (pushQueue.length >= RUSH_HANDLING_CONFIG.queueSize) {
+        const dropped = pushQueue.shift();
+        rushHandlingStats.totalDropped++;
+        console.warn(`🚨 Queue full, dropped record: ${dropped.id}`);
+    }
+
+    pushQueue.push(queueItem);
+    rushHandlingStats.totalQueued++;
+    rushHandlingStats.queueLength = pushQueue.length;
+
+    console.log(`📥 Added to queue: ${queueItem.id}. Queue length: ${pushQueue.length}`);
+
+    // Start processing if not already running
+    if (!isProcessingQueue) {
+        setTimeout(processQueue, 10);
+    }
+
+    io.emit('queue_status', {
+        queueLength: pushQueue.length,
+        concurrentPushes: concurrentPushCount,
+        stats: rushHandlingStats
+    });
+
+    return queueItem.id;
+}
+
+/**
+ * Process the queue with controlled concurrency
+ */
+async function processQueue() {
+    if (isProcessingQueue) {
+        console.log('🔄 Queue processing already running, skipping...');
+        return;
+    }
+
+    isProcessingQueue = true;
+    console.log(`🚀 Starting queue processing. Items in queue: ${pushQueue.length}`);
+
     try {
-        let cleanStr = str.replace(/[^\x20-\x7E]/g, '');
-        return cleanStr || 'Unknown';
+        while (pushQueue.length > 0 && isProcessingQueue) {
+            const availableSlots = RUSH_HANDLING_CONFIG.maxConcurrentPushes - concurrentPushCount;
+            
+            if (availableSlots <= 0) {
+                console.log(`⏳ No available slots (${concurrentPushCount}/${RUSH_HANDLING_CONFIG.maxConcurrentPushes}). Waiting...`);
+                await new Promise(resolve => setTimeout(resolve, RUSH_HANDLING_CONFIG.processingDelay));
+                continue;
+            }
+
+            const batchSize = Math.min(availableSlots, RUSH_HANDLING_CONFIG.batchSize, pushQueue.length);
+            const batch = pushQueue.splice(0, batchSize);
+            rushHandlingStats.queueLength = pushQueue.length;
+
+            console.log(`📦 Processing batch of ${batch.length} items`);
+
+            const processingPromises = batch.map(item => processQueueItem(item));
+            await Promise.allSettled(processingPromises);
+
+            if (pushQueue.length > 0) {
+                await new Promise(resolve => setTimeout(resolve, RUSH_HANDLING_CONFIG.processingDelay));
+            }
+
+            io.emit('queue_status', {
+                queueLength: pushQueue.length,
+                concurrentPushes: concurrentPushCount,
+                stats: rushHandlingStats
+            });
+        }
     } catch (error) {
-        return 'Decoding Error';
+        console.error('❌ Error in queue processing:', error);
+    } finally {
+        isProcessingQueue = false;
+        console.log('✅ Queue processing completed');
     }
 }
 
+/**
+ * Process individual queue item
+ */
+async function processQueueItem(queueItem) {
+    concurrentPushCount++;
+    
+    try {
+        console.log(`🔧 Processing record ${queueItem.record.id} (Attempt ${queueItem.attemptCount + 1})`);
+
+        const result = await pushToExternalAPI(queueItem.record, queueItem.attemptCount);
+
+        if (result.success) {
+            rushHandlingStats.totalProcessed++;
+            console.log(`✅ Successfully processed: ${queueItem.record.id} -> ${result.payload.emp_code} ${result.payload.punch_time}`);
+            
+            io.emit('external_api_push', {
+                recordId: queueItem.record.id,
+                success: true,
+                message: 'Auto-pushed successfully',
+                payload: result.payload,
+                timestamp: new Date().toISOString()
+            });
+        } else {
+            rushHandlingStats.totalErrors++;
+            console.error(`❌ Failed to process: ${queueItem.record.id} - ${result.error}`);
+            
+            if (queueItem.attemptCount < RUSH_HANDLING_CONFIG.retryStrategy.maxRetries) {
+                queueItem.attemptCount++;
+                const backoffDelay = RUSH_HANDLING_CONFIG.retryStrategy.baseDelay * Math.pow(2, queueItem.attemptCount);
+                
+                console.log(`🔄 Retrying in ${backoffDelay}ms (Attempt ${queueItem.attemptCount + 1})`);
+                
+                setTimeout(() => {
+                    pushQueue.push(queueItem);
+                    rushHandlingStats.queueLength = pushQueue.length;
+                    if (!isProcessingQueue) {
+                        processQueue();
+                    }
+                }, Math.min(backoffDelay, RUSH_HANDLING_CONFIG.retryStrategy.maxDelay));
+            } else {
+                console.error(`💀 Final failure after ${queueItem.attemptCount + 1} attempts: ${queueItem.record.id}`);
+                
+                io.emit('external_api_push', {
+                    recordId: queueItem.record.id,
+                    success: false,
+                    message: `Failed after ${queueItem.attemptCount + 1} attempts: ${result.error}`,
+                    timestamp: new Date().toISOString()
+                });
+            }
+        }
+
+    } catch (error) {
+        console.error(`🚨 Unexpected error processing ${queueItem.record.id}:`, error);
+        rushHandlingStats.totalErrors++;
+    } finally {
+        concurrentPushCount--;
+    }
+}
+
+// ===== HELPER FUNCTIONS =====
 function findUserName(userId) {
     if (!usersCache || !Array.isArray(usersCache)) return 'Unknown';
     const user = usersCache.find(u => u.userId == userId || u.id == userId);
@@ -110,7 +281,7 @@ function parseZktecoTime(recordTime) {
     }
 }
 
-// ===== ENHANCED EXTERNAL API PUSH =====
+// ===== EXTERNAL API PUSH =====
 async function pushToExternalAPI(attendanceData, retryCount = 0) {
     if (!EXTERNAL_API_CONFIG.enabled) {
         return { 
@@ -124,498 +295,246 @@ async function pushToExternalAPI(attendanceData, retryCount = 0) {
 
     try {
         const emp_code = attendanceData.userId;
-        const punch_time = new Date(attendanceData.timestamp).toTimeString().split(' ')[0];
-
-        const payload = {
-            emp_code: emp_code,
-            punch_time: punch_time
-        };
-
-        console.log(`🔄 [Attempt ${retryCount + 1}] Pushing to external API:`, payload);
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), EXTERNAL_API_CONFIG.timeout);
-
-        const response = await fetch(EXTERNAL_API_CONFIG.url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(payload),
-            signal: controller.signal
+        
+        const punch_time = new Date(attendanceData.timestamp);
+        const formattedTime = punch_time.toLocaleTimeString('en-GB', { 
+            hour12: false,
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
         });
 
-        clearTimeout(timeoutId);
+        const formattedDate = punch_time.toISOString().split('T')[0];
 
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        const payloadVariations = [
+            {
+                emp_code: emp_code,
+                punch_time: formattedTime,
+                punch_date: formattedDate,
+                device_ip: DEVICE_IP,
+                user_name: attendanceData.userName || 'Unknown'
+            },
+            {
+                employee_code: emp_code,
+                time: formattedTime,
+                date: formattedDate
+            },
+            {
+                emp_id: emp_code,
+                punch_time: formattedTime,
+                punch_date: formattedDate
+            }
+        ];
+
+        let lastError = null;
+        
+        for (const payload of payloadVariations) {
+            try {
+                console.log(`\n📤 [PUSH START] Attempting to push attendance data:`);
+                console.log(`   👤 Employee: ${attendanceData.userName} (${emp_code})`);
+                console.log(`   🕒 Time: ${formattedTime}`);
+                console.log(`   📅 Date: ${formattedDate}`);
+                console.log(`   🔄 Attempt: ${retryCount + 1}`);
+                console.log(`   📦 Payload:`, JSON.stringify(payload, null, 2));
+
+                const response = await fetch(EXTERNAL_API_CONFIG.url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(payload),
+                    signal: AbortSignal.timeout(EXTERNAL_API_CONFIG.timeout)
+                });
+
+                const responseText = await response.text();
+                let responseData;
+                
+                try {
+                    responseData = JSON.parse(responseText);
+                } catch (e) {
+                    responseData = { message: responseText, raw: responseText };
+                }
+
+                console.log(`📡 [API RESPONSE] Status: ${response.status}`);
+                console.log(`   Response:`, JSON.stringify(responseData, null, 2));
+
+                if (response.ok) {
+                    pushStatistics.successfulPushes++;
+                    pushStatistics.lastPush = new Date().toISOString();
+
+                    console.log(`✅ [PUSH SUCCESS] External API accepted the data`);
+                    console.log(`   👤 Employee: ${emp_code}`);
+                    console.log(`   🕒 Time: ${formattedTime}`);
+                    console.log(`   📊 Response:`, responseData);
+
+                    return {
+                        success: true,
+                        data: responseData,
+                        payload: payload,
+                        retryCount: retryCount
+                    };
+                } else {
+                    lastError = new Error(`HTTP ${response.status}: ${response.statusText} - ${responseText}`);
+                    console.warn(`⚠️ [PUSH FAILED] Payload format failed, trying next format...`);
+                }
+            } catch (error) {
+                lastError = error;
+                console.warn(`⚠️ [PUSH ERROR] Payload format error:`, error.message);
+            }
         }
 
-        const responseData = await response.json();
-        
-        pushStatistics.successfulPushes++;
-        pushStatistics.lastPush = new Date().toISOString();
-        pushStatistics.lastSuccess = new Date().toISOString();
-
-        console.log('✅ External API push SUCCESS:', {
-            emp_code: emp_code,
-            punch_time: punch_time,
-            response: responseData
-        });
-
-        return {
-            success: true,
-            data: responseData,
-            payload: payload,
-            retryCount: retryCount,
-            timestamp: new Date().toISOString()
-        };
+        throw lastError || new Error('All payload formats failed');
 
     } catch (error) {
         pushStatistics.failedPushes++;
-        pushStatistics.lastError = error.message;
         
-        console.error(`❌ External API push FAILED (Attempt ${retryCount + 1}):`, error.message);
-
-        // Retry logic
-        if (retryCount < EXTERNAL_API_CONFIG.maxRetries) {
-            console.log(`🔄 Retrying in ${EXTERNAL_API_CONFIG.retryDelay}ms...`);
-            await new Promise(resolve => setTimeout(resolve, EXTERNAL_API_CONFIG.retryDelay));
-            return pushToExternalAPI(attendanceData, retryCount + 1);
-        }
-
+        console.error(`❌ [PUSH FINAL FAILURE] All attempts failed:`);
+        console.error(`   👤 Employee: ${attendanceData.userId}`);
+        console.error(`   🕒 Time: ${new Date(attendanceData.timestamp).toLocaleTimeString('en-GB', { hour12: false })}`);
+        console.error(`   📅 Date: ${new Date(attendanceData.timestamp).toISOString().split('T')[0]}`);
+        console.error(`   ❌ Error: ${error.message}`);
+        
         return {
             success: false,
             error: error.message,
             payload: {
                 emp_code: attendanceData.userId,
-                punch_time: new Date(attendanceData.timestamp).toTimeString().split(' ')[0]
+                punch_time: new Date(attendanceData.timestamp).toLocaleTimeString('en-GB', { hour12: false }),
+                punch_date: new Date(attendanceData.timestamp).toISOString().split('T')[0]
             },
-            retryCount: retryCount,
-            timestamp: new Date().toISOString()
+            retryCount: retryCount
         };
     }
 }
 
-// ===== API ROUTES =====
-
-// Device Information
-app.get('/api/device-info', async (_req, res) => {
-    if (!deviceInstance) {
-        return res.status(503).json({ error: 'Device not connected' });
+// ===== POLLING MECHANISM =====
+async function pollForNewAttendances() {
+    if (!deviceInstance || !POLLING_CONFIG.enabled) {
+        return;
     }
+
     try {
-        const formattedInfo = {
-            'IP Address': DEVICE_IP,
-            'Port': DEVICE_PORT,
-            'Connection Status': 'Connected',
-            'External API': EXTERNAL_API_CONFIG.enabled ? 'Enabled' : 'Disabled'
-        };
-
-        try {
-            const basicInfo = await deviceInstance.getInfo();
-            formattedInfo['Total Users'] = basicInfo?.userCount || 0;
-            formattedInfo['Total Attendance Records'] = basicInfo?.attendanceCount || 0;
-        } catch (e) {
-            console.error('Error getting basic info:', e);
-        }
-
-        res.status(200).json(formattedInfo);
-    } catch (error) {
-        console.error('Error fetching device info:', error);
-        res.status(500).json({ error: 'Failed to fetch device information' });
-    }
-});
-
-// User Management
-app.get('/api/users', async (_req, res) => {
-    if (!deviceInstance) {
-        return res.status(503).json({ error: 'Device not connected' });
-    }
-    try {
-        let users = await deviceInstance.getUsers();
-        if (users && typeof users === 'object' && !Array.isArray(users)) {
-            users = Object.values(users).find(val => Array.isArray(val)) || [];
-        }
-        users = Array.isArray(users) ? users : [];
-        usersCache = users;
-        res.status(200).json(users);
-    } catch (error) {
-        console.error('Error fetching users:', error);
-        res.status(500).json({ error: 'Failed to fetch users from device' });
-    }
-});
-
-app.post('/api/users', async (req, res) => {
-    if (!deviceInstance) {
-        return res.status(503).json({ error: 'Device not connected' });
-    }
-    try {
-        const { userId, name, cardNumber, role, password } = req.body;
-        if (!userId || !name) {
-            return res.status(400).json({ error: 'User ID and Name are required' });
-        }
-        const user = {
-            userId: parseInt(userId),
-            name: name,
-            cardNumber: cardNumber || 0,
-            role: role || 0,
-            password: password || ""
-        };
-        const result = await deviceInstance.setUser(user);
-        usersCache = await deviceInstance.getUsers();
-        io.emit('users_data', usersCache);
-        res.status(201).json({ message: 'User added successfully', user: user });
-    } catch (error) {
-        console.error('Error adding user:', error);
-        res.status(500).json({ error: 'Failed to add user to device' });
-    }
-});
-
-app.put('/api/users/:userId', async (req, res) => {
-    if (!deviceInstance) {
-        return res.status(503).json({ error: 'Device not connected' });
-    }
-    try {
-        const userId = parseInt(req.params.userId);
-        const { name, cardNumber, role, password } = req.body;
-        const users = await deviceInstance.getUsers();
-        const user = users.find(u => u.userId === userId);
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        if (name) user.name = name;
-        if (cardNumber) user.cardNumber = cardNumber;
-        if (role) user.role = role;
-        if (password) user.password = password;
-        const result = await deviceInstance.setUser(user);
-        usersCache = await deviceInstance.getUsers();
-        io.emit('users_data', usersCache);
-        res.status(200).json({ message: 'User updated successfully', user: user });
-    } catch (error) {
-        console.error('Error updating user:', error);
-        res.status(500).json({ error: 'Failed to update user on device' });
-    }
-});
-
-app.delete('/api/users/:userId', async (req, res) => {
-    if (!deviceInstance) {
-        return res.status(503).json({ error: 'Device not connected' });
-    }
-    try {
-        const userId = parseInt(req.params.userId);
-        const result = await deviceInstance.deleteUser(userId);
-        usersCache = await deviceInstance.getUsers();
-        io.emit('users_data', usersCache);
-        res.status(200).json({ message: 'User deleted successfully' });
-    } catch (error) {
-        console.error('Error deleting user:', error);
-        res.status(500).json({ error: 'Failed to delete user from device' });
-    }
-});
-
-// Attendance Management
-app.get('/api/attendance', async (req, res) => {
-    if (!deviceInstance) {
-        return res.status(503).json({ error: 'Device not connected' });
-    }
-    try {
-        const filterDate = req.query.date;
-        let deviceLogs;
-        try {
-            deviceLogs = await deviceInstance.getAttendances();
-        } catch (error) {
-            throw new Error(`Failed to fetch attendance: ${error.message}`);
-        }
-        if (!deviceLogs) {
-            return res.status(500).json({ error: 'No data received from device' });
-        }
+        console.log(`\n🔍 [POLLING] Checking for new attendance records...`);
+        
+        let deviceLogs = await deviceInstance.getAttendances();
         if (!Array.isArray(deviceLogs)) {
             deviceLogs = Object.values(deviceLogs).find(val => Array.isArray(val)) || [];
         }
-        let processedLogs = deviceLogs.map((log, index) => {
+
+        // Process logs and find new ones
+        let newLogs = deviceLogs.map((log, index) => {
             const timestamp = parseZktecoTime(log.record_time);
             const userId = log.user_id || log.userId || 'Unknown';
             return {
-                id: `att-${timestamp.getTime()}-${index}`,
+                id: `poll-${timestamp.getTime()}-${index}`,
                 userId: userId,
                 userName: findUserName(userId),
                 timestamp: timestamp.toISOString(),
-                date: timestamp.toLocaleDateString(),
-                time: timestamp.toLocaleTimeString(),
                 verificationMethod: determineVerificationMethod(log),
                 punchType: determinePunchType(log),
                 deviceIp: DEVICE_IP,
-                rawData: log
+                rawData: log,
+                pollTime: timestamp
             };
         });
-        if (filterDate) {
-            processedLogs = processedLogs.filter(log => {
-                const logDate = new Date(log.timestamp).toISOString().split('T')[0];
-                return logDate === filterDate;
-            });
-        }
-        processedLogs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-        attendanceHistory = processedLogs;
-        res.status(200).json({
-            success: true,
-            total: processedLogs.length,
-            records: processedLogs,
-            lastUpdated: new Date().toISOString(),
-            filterDate: filterDate || 'all'
-        });
-    } catch (error) {
-        console.error('Error fetching attendance:', error);
-        res.status(500).json({ error: 'Failed to fetch attendance data' });
-    }
-});
 
-// External API Management
-app.post('/api/push-attendance', async (req, res) => {
-    try {
-        const { emp_code, punch_time } = req.body;
-        if (!emp_code || !punch_time) {
-            return res.status(400).json({ error: 'emp_code and punch_time are required' });
-        }
-        const payload = { emp_code, punch_time };
-        console.log('Manual push to external API:', payload);
-        const response = await fetch(EXTERNAL_API_CONFIG.url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        const responseData = await response.json();
-        res.status(200).json({
-            success: true,
-            message: 'Attendance pushed successfully',
-            data: responseData,
-            payload: payload
-        });
-    } catch (error) {
-        console.error('Error in manual push:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-app.get('/api/external-api-status', (_req, res) => {
-    res.json({
-        enabled: EXTERNAL_API_CONFIG.enabled,
-        url: EXTERNAL_API_CONFIG.url,
-        description: 'External API for pushing attendance data'
-    });
-});
-
-app.get('/api/push-statistics', (_req, res) => {
-    res.json({
-        enabled: EXTERNAL_API_CONFIG.enabled,
-        config: EXTERNAL_API_CONFIG,
-        statistics: pushStatistics,
-        uptime: process.uptime()
-    });
-});
-
-app.post('/api/toggle-external-api', (req, res) => {
-    const { enabled } = req.body;
-    if (typeof enabled === 'boolean') {
-        EXTERNAL_API_CONFIG.enabled = enabled;
-        console.log(`External API ${enabled ? 'ENABLED' : 'DISABLED'}`);
-        io.emit('external_api_config_changed', {
-            enabled: EXTERNAL_API_CONFIG.enabled,
-            timestamp: new Date().toISOString()
-        });
-        res.json({
-            success: true,
-            message: `External API ${enabled ? 'enabled' : 'disabled'}`,
-            enabled: EXTERNAL_API_CONFIG.enabled
-        });
-    } else {
-        res.status(400).json({ success: false, error: 'Invalid enabled parameter' });
-    }
-});
-
-app.post('/api/push-record/:recordId', async (req, res) => {
-    try {
-        const recordId = req.params.recordId;
-        const record = attendanceHistory.find(r => r.id === recordId);
-        if (!record) {
-            return res.status(404).json({ success: false, error: 'Record not found' });
-        }
-        console.log('Manual push requested for record:', recordId);
-        const result = await pushToExternalAPI(record);
-        res.json({
-            success: result.success,
-            message: result.success ? 'Record pushed successfully' : result.error,
-            recordId: recordId,
-            result: result
-        });
-    } catch (error) {
-        console.error('Error in manual push:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// Dashboard Statistics
-app.get('/api/dashboard/stats', async (_req, res) => {
-    try {
-        const today = new Date().toISOString().split('T')[0];
-        const todayRecords = attendanceHistory.filter(record => 
-            new Date(record.timestamp).toISOString().split('T')[0] === today
-        );
+        // Filter only new records since last poll
+        newLogs = newLogs.filter(log => log.pollTime > lastPolledTimestamp);
         
-        const stats = {
-            totalEmployees: usersCache.length,
-            presentToday: todayRecords.filter(record => record.punchType === 'Check-in').length,
-            pendingLeaves: 0, // You can implement leave management later
-            activeShifts: 0,  // You can implement shift management later
-            totalAttendance: attendanceHistory.length,
-            externalApiPushes: pushStatistics.totalPushes,
-            externalApiSuccessRate: pushStatistics.totalPushes > 0 ? 
-                (pushStatistics.successfulPushes / pushStatistics.totalPushes * 100).toFixed(2) + '%' : '0%'
-        };
+        // Sort by timestamp
+        newLogs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-        res.json(stats);
-    } catch (error) {
-        console.error('Error fetching dashboard stats:', error);
-        res.status(500).json({ error: 'Failed to fetch dashboard statistics' });
-    }
-});
-
-// Diagnostic endpoint
-app.get('/api/diagnostic', async (_req, res) => {
-    const diagnostic = {
-        server: {
-            status: 'running',
-            port: EXPRESS_PORT,
-            uptime: process.uptime()
-        },
-        device: {
-            connected: !!deviceInstance,
-            ip: DEVICE_IP,
-            port: DEVICE_PORT
-        },
-        external_api: EXTERNAL_API_CONFIG,
-        data: {
-            users: usersCache.length,
-            attendance: attendanceHistory.length
-        },
-        push_statistics: pushStatistics
-    };
-
-    if (deviceInstance) {
-        try {
-            const testUsers = await deviceInstance.getUsers();
-            diagnostic.device.users = Array.isArray(testUsers) ? testUsers.length : 'error';
-            const testAttendance = await deviceInstance.getAttendances();
-            diagnostic.device.attendance = Array.isArray(testAttendance) ? testAttendance.length : 'error';
-            diagnostic.device.status = 'operational';
-        } catch (error) {
-            diagnostic.device.status = 'communication error: ' + error.message;
-        }
-    }
-
-    res.json(diagnostic);
-});
-
-// Health check
-app.get('/', (_req, res) => {
-    res.json({
-        status: 'OK',
-        message: 'HR Management System is running',
-        timestamp: new Date().toISOString(),
-        version: '1.0.0'
-    });
-});
-
-// Handle preflight requests
-app.options('*', cors());
-
-// ===== SOCKET.IO REAL-TIME HANDLERS =====
-io.on('connection', (socket) => {
-    console.log('🔌 New client connected for real-time monitoring');
-    
-    // Send current data to newly connected client
-    socket.emit('users_data', usersCache);
-    socket.emit('attendance_history', attendanceHistory);
-    socket.emit('push_statistics', pushStatistics);
-    socket.emit('external_api_config', EXTERNAL_API_CONFIG);
-    
-    if (deviceInstance) {
-        deviceInstance.getInfo()
-            .then(info => socket.emit('device_info', info))
-            .catch(error => console.error('Error getting device info:', error));
-    }
-
-    socket.on('toggle_external_api', (data) => {
-        if (typeof data.enabled === 'boolean') {
-            EXTERNAL_API_CONFIG.enabled = data.enabled;
-            console.log(`Client requested external API ${data.enabled ? 'ENABLE' : 'DISABLE'}`);
-            io.emit('external_api_config_changed', {
-                enabled: EXTERNAL_API_CONFIG.enabled,
-                timestamp: new Date().toISOString()
+        if (newLogs.length > 0) {
+            console.log(`🎯 [POLLING] Found ${newLogs.length} new attendance record(s) since last poll`);
+            
+            // Process each new record
+            newLogs.forEach(log => {
+                console.log(`\n🎯 [POLLED PUNCH] Detected via polling:`);
+                console.log(`   👤 User: ${log.userName} (${log.userId})`);
+                console.log(`   🕒 Time: ${new Date(log.timestamp).toLocaleTimeString()}`);
+                console.log(`   📅 Date: ${new Date(log.timestamp).toLocaleDateString()}`);
+                console.log(`   🔒 Method: ${log.verificationMethod}`);
+                console.log(`   📝 Type: ${log.punchType}`);
+                
+                // Process this attendance record
+                processAttendanceRecord(log);
             });
-        }
-    });
 
-    socket.on('manual_push_record', async (data) => {
-        const record = attendanceHistory.find(r => r.id === data.recordId);
-        if (record) {
-            console.log('Manual push requested via socket for record:', data.recordId);
-            const result = await pushToExternalAPI(record);
-            socket.emit('manual_push_result', {
-                recordId: data.recordId,
-                success: result.success,
-                message: result.success ? 'Manual push successful' : result.error,
-                result: result
+            // Update last polled timestamp to the latest record
+            lastPolledTimestamp = new Date(Math.max(...newLogs.map(log => log.pollTime.getTime())));
+        } else {
+            console.log(`🔍 [POLLING] No new records found since last poll`);
+        }
+
+    } catch (error) {
+        console.error('❌ [POLLING ERROR] Failed to poll attendance data:', error.message);
+    }
+}
+
+// ===== ATTENDANCE PROCESSING =====
+function processAttendanceRecord(attendanceRecord) {
+    console.log(`\n🎯 ===== PROCESSING ATTENDANCE RECORD =====`);
+    console.log(`   👤 User: ${attendanceRecord.userName} (${attendanceRecord.userId})`);
+    console.log(`   🕒 Time: ${new Date(attendanceRecord.timestamp).toLocaleTimeString()}`);
+    console.log(`   📅 Date: ${new Date(attendanceRecord.timestamp).toLocaleDateString()}`);
+    console.log(`   🔒 Method: ${attendanceRecord.verificationMethod}`);
+    console.log(`   📝 Type: ${attendanceRecord.punchType}`);
+    
+    // ===== AUTO PUSH TO EXTERNAL API =====
+    if (EXTERNAL_API_CONFIG.enabled) {
+        if (RUSH_HANDLING_CONFIG.enabled) {
+            const queueId = addToProcessingQueue(attendanceRecord);
+            console.log(`🚀 [AUTO PUSH QUEUED] Added to processing queue`);
+            console.log(`   📋 Queue ID: ${queueId}`);
+            console.log(`   📊 Queue Length: ${pushQueue.length}`);
+            
+            io.emit('attendance_queued', {
+                recordId: attendanceRecord.id,
+                queueId: queueId,
+                queueLength: pushQueue.length
             });
         } else {
-            socket.emit('manual_push_result', {
-                recordId: data.recordId,
-                success: false,
-                message: 'Record not found'
-            });
+            console.log('⚡ [DIRECT PUSH] Attempting direct push to external API...');
+            pushToExternalAPI(attendanceRecord)
+                .then(result => {
+                    if (result.success) {
+                        console.log(`✅ [DIRECT PUSH SUCCESS] Completed successfully`);
+                        io.emit('external_api_push', {
+                            recordId: attendanceRecord.id,
+                            success: true,
+                            message: 'Auto-pushed successfully',
+                            payload: result.payload,
+                            timestamp: new Date().toISOString()
+                        });
+                    } else {
+                        console.error(`❌ [DIRECT PUSH FAILED] Error: ${result.error}`);
+                    }
+                })
+                .catch(error => {
+                    console.error('🚨 [DIRECT PUSH ERROR] Unexpected error:', error);
+                });
         }
-    });
-
-    socket.on('refresh_attendance', async () => {
-        try {
-            if (deviceInstance) {
-                const logs = await deviceInstance.getAttendances();
-                if (logs && Array.isArray(logs)) {
-                    const processedLogs = logs.map((log, index) => {
-                        const timestamp = parseZktecoTime(log.record_time);
-                        const userId = log.user_id || log.userId || 'Unknown';
-                        return {
-                            id: `att-${timestamp.getTime()}-${index}`,
-                            userId: userId,
-                            userName: findUserName(userId),
-                            timestamp: timestamp.toISOString(),
-                            date: timestamp.toLocaleDateString(),
-                            time: timestamp.toLocaleTimeString(),
-                            verificationMethod: determineVerificationMethod(log),
-                            punchType: determinePunchType(log),
-                            deviceIp: DEVICE_IP,
-                            rawData: log
-                        };
-                    });
-                    attendanceHistory = processedLogs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-                    socket.emit('attendance_history', attendanceHistory);
-                }
-            }
-        } catch (error) {
-            console.error('Error refreshing attendance:', error);
-            socket.emit('error', { message: 'Failed to refresh attendance data' });
-        }
-    });
-
-    socket.on('disconnect', () => {
-        console.log('🔌 Client disconnected');
-    });
-});
+    } else {
+        console.log('🌐 [AUTO PUSH SKIPPED] External API disabled in configuration');
+    }
+    
+    // Add to history
+    attendanceHistory.unshift(attendanceRecord);
+    if (attendanceHistory.length > 1000) {
+        attendanceHistory = attendanceHistory.slice(0, 1000);
+    }
+    
+    // Broadcast to clients
+    io.emit('attendance_record', attendanceRecord);
+    io.emit('attendance_history', attendanceHistory);
+    
+    console.log('🎯 ===== ATTENDANCE PROCESSING COMPLETE =====\n');
+}
 
 // ===== REAL-TIME ATTENDANCE PROCESSING =====
 async function processAndBroadcastAttendance(logData) {
-    console.log('📥 Raw real-time attendance data received');
+    console.log('\n🎯 ===== REAL-TIME PUNCH DETECTED =====');
+    console.log('📥 Raw device data:', JSON.stringify(logData, null, 2));
     
     if (!logData) return;
     
@@ -632,79 +551,319 @@ async function processAndBroadcastAttendance(logData) {
         verificationMethod: determineVerificationMethod(logData),
         punchType: determinePunchType(logData),
         deviceIp: DEVICE_IP,
-        rawData: logData,
-        externalApiPush: null
+        rawData: logData
     };
     
-    console.log('📊 Processed real-time attendance record:', {
-        userId: attendanceRecord.userId,
-        userName: attendanceRecord.userName,
-        punchType: attendanceRecord.punchType,
-        time: attendanceRecord.time
-    });
-    
-    // ===== REAL-TIME EXTERNAL API PUSH =====
-    if (EXTERNAL_API_CONFIG.enabled) {
-        console.log('🚀 Starting real-time external API push...');
-        
-        pushToExternalAPI(attendanceRecord)
-            .then(apiResult => {
-                attendanceRecord.externalApiPush = apiResult;
-                
-                if (apiResult.success) {
-                    console.log('✅ REAL-TIME PUSH SUCCESS:', {
-                        emp_code: apiResult.payload.emp_code,
-                        punch_time: apiResult.payload.punch_time,
-                        attempts: apiResult.retryCount + 1
-                    });
-                } else {
-                    console.log('❌ REAL-TIME PUSH FAILED after', apiResult.retryCount + 1, 'attempts:', apiResult.error);
-                }
-                
-                io.emit('external_api_push', {
-                    recordId: attendanceRecord.id,
-                    success: apiResult.success,
-                    message: apiResult.success ? 
-                        `Successfully pushed to external API (${apiResult.retryCount + 1} attempt(s))` : 
-                        `Failed after ${apiResult.retryCount + 1} attempt(s): ${apiResult.error}`,
-                    payload: apiResult.payload,
-                    timestamp: new Date().toISOString(),
-                    statistics: pushStatistics
-                });
-                
-                io.emit('attendance_record_updated', attendanceRecord);
-            })
-            .catch(error => {
-                console.error('🚨 Unhandled error in external API push:', error);
-                attendanceRecord.externalApiPush = {
-                    success: false,
-                    error: error.message,
-                    timestamp: new Date().toISOString()
-                };
-                io.emit('external_api_push', {
-                    recordId: attendanceRecord.id,
-                    success: false,
-                    message: `Unhandled error: ${error.message}`,
-                    timestamp: new Date().toISOString()
-                });
-            });
-    }
-    
-    attendanceHistory.unshift(attendanceRecord);
-    if (attendanceHistory.length > 1000) {
-        attendanceHistory = attendanceHistory.slice(0, 1000);
-    }
-    
-    io.emit('attendance_record', attendanceRecord);
-    io.emit('attendance_history', attendanceHistory);
-    io.emit('push_statistics', pushStatistics);
+    processAttendanceRecord(attendanceRecord);
 }
+
+// ===== API ROUTES =====
+
+// Rush Handling Management
+app.get('/api/rush-handling-status', (_req, res) => {
+    res.json({
+        enabled: RUSH_HANDLING_CONFIG.enabled,
+        config: RUSH_HANDLING_CONFIG,
+        stats: rushHandlingStats,
+        queue: {
+            length: pushQueue.length,
+            concurrent: concurrentPushCount,
+            isProcessing: isProcessingQueue
+        }
+    });
+});
+
+app.post('/api/rush-handling-control', (req, res) => {
+    const { action, config } = req.body;
+    
+    try {
+        switch (action) {
+            case 'pause':
+                isProcessingQueue = false;
+                console.log('⏸️ Queue processing paused');
+                break;
+                
+            case 'resume':
+                if (!isProcessingQueue && pushQueue.length > 0) {
+                    processQueue();
+                }
+                console.log('▶️ Queue processing resumed');
+                break;
+                
+            case 'clear-queue':
+                const clearedCount = pushQueue.length;
+                pushQueue.length = 0;
+                rushHandlingStats.queueLength = 0;
+                console.log(`🗑️ Cleared ${clearedCount} items from queue`);
+                break;
+                
+            case 'update-config':
+                if (config) {
+                    Object.assign(RUSH_HANDLING_CONFIG, config);
+                    console.log('⚙️ Rush handling configuration updated');
+                }
+                break;
+                
+            default:
+                return res.status(400).json({ error: 'Invalid action' });
+        }
+        
+        res.json({
+            success: true,
+            message: `Action '${action}' completed`,
+            stats: rushHandlingStats
+        });
+        
+    } catch (error) {
+        console.error('Error in rush handling control:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Device Information
+app.get('/api/device-info', async (_req, res) => {
+    if (!deviceInstance) return res.status(503).json({ error: 'Device not connected' });
+    try {
+        const formattedInfo = {
+            'IP Address': DEVICE_IP,
+            'Port': DEVICE_PORT,
+            'Connection Status': 'Connected',
+            'Real-time Monitoring': realTimeListenersActive ? 'Active' : 'Inactive',
+            'Polling': POLLING_CONFIG.enabled ? 'Active' : 'Inactive',
+            'External API': EXTERNAL_API_CONFIG.enabled ? 'Enabled' : 'Disabled',
+            'Rush Handling': RUSH_HANDLING_CONFIG.enabled ? 'Enabled' : 'Disabled',
+            'Queue Status': `${pushQueue.length} items waiting`
+        };
+        res.status(200).json(formattedInfo);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch device information' });
+    }
+});
+
+// User Management
+app.get('/api/users', async (_req, res) => {
+    if (!deviceInstance) return res.status(503).json({ error: 'Device not connected' });
+    try {
+        let users = await deviceInstance.getUsers();
+        if (users && typeof users === 'object' && !Array.isArray(users)) {
+            users = Object.values(users).find(val => Array.isArray(val)) || [];
+        }
+        users = Array.isArray(users) ? users : [];
+        usersCache = users;
+        res.status(200).json(users);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch users from device' });
+    }
+});
+
+// Attendance Management
+app.get('/api/attendance', async (req, res) => {
+    if (!deviceInstance) return res.status(503).json({ error: 'Device not connected' });
+    try {
+        const filterDate = req.query.date;
+        let deviceLogs = await deviceInstance.getAttendances();
+        if (!Array.isArray(deviceLogs)) {
+            deviceLogs = Object.values(deviceLogs).find(val => Array.isArray(val)) || [];
+        }
+        let processedLogs = deviceLogs.map((log, index) => {
+            const timestamp = parseZktecoTime(log.record_time);
+            const userId = log.user_id || log.userId || 'Unknown';
+            return {
+                id: `att-${timestamp.getTime()}-${index}`,
+                userId: userId,
+                userName: findUserName(userId),
+                timestamp: timestamp.toISOString(),
+                verificationMethod: determineVerificationMethod(log),
+                punchType: determinePunchType(log),
+                deviceIp: DEVICE_IP,
+                rawData: log
+            };
+        });
+        if (filterDate) {
+            processedLogs = processedLogs.filter(log => 
+                new Date(log.timestamp).toISOString().split('T')[0] === filterDate
+            );
+        }
+        processedLogs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        attendanceHistory = processedLogs;
+        res.status(200).json({
+            success: true,
+            total: processedLogs.length,
+            records: processedLogs,
+            lastUpdated: new Date().toISOString()
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch attendance data' });
+    }
+});
+
+// Manual Push Endpoint
+app.post('/api/push-attendance', async (req, res) => {
+    try {
+        const { emp_code, punch_time, punch_date } = req.body;
+        if (!emp_code || !punch_time) {
+            return res.status(400).json({ error: 'emp_code and punch_time are required' });
+        }
+        
+        const payload = { 
+            emp_code, 
+            punch_time,
+            punch_date: punch_date || new Date().toISOString().split('T')[0]
+        };
+        
+        console.log(`\n🔄 [MANUAL PUSH] Starting manual push:`);
+        console.log(`   👤 Employee: ${emp_code}`);
+        console.log(`   🕒 Time: ${punch_time}`);
+        console.log(`   📅 Date: ${payload.punch_date}`);
+        
+        const response = await fetch(EXTERNAL_API_CONFIG.url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(EXTERNAL_API_CONFIG.timeout)
+        });
+
+        const responseText = await response.text();
+        let responseData;
+        
+        try {
+            responseData = JSON.parse(responseText);
+        } catch (e) {
+            responseData = { raw_response: responseText };
+        }
+        
+        console.log(`📡 [MANUAL PUSH RESPONSE] Status: ${response.status}`);
+        console.log(`   Response:`, JSON.stringify(responseData, null, 2));
+        
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        
+        console.log(`✅ [MANUAL PUSH SUCCESS] Completed successfully`);
+        
+        res.status(200).json({
+            success: true,
+            message: 'Attendance pushed successfully',
+            data: responseData,
+            payload: payload
+        });
+    } catch (error) {
+        console.error(`❌ [MANUAL PUSH FAILED] Error: ${error.message}`);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Force Poll Now
+app.post('/api/poll-now', async (_req, res) => {
+    try {
+        console.log('\n🔍 [MANUAL POLL] Manual poll triggered via API');
+        await pollForNewAttendances();
+        res.json({
+            success: true,
+            message: 'Polling completed',
+            queue_length: pushQueue.length,
+            last_polled: lastPolledTimestamp
+        });
+    } catch (error) {
+        console.error('❌ Manual poll failed:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Statistics
+app.get('/api/push-statistics', (_req, res) => {
+    res.json({
+        external_api: EXTERNAL_API_CONFIG,
+        push_statistics: pushStatistics,
+        rush_handling: rushHandlingStats,
+        polling: {
+            enabled: POLLING_CONFIG.enabled,
+            last_polled: lastPolledTimestamp,
+            interval: POLLING_CONFIG.interval
+        }
+    });
+});
+
+// Diagnostic
+app.get('/api/diagnostic', async (_req, res) => {
+    const diagnostic = {
+        server: { status: 'running', port: EXPRESS_PORT, uptime: process.uptime() },
+        device: { 
+            connected: !!deviceInstance, 
+            ip: DEVICE_IP, 
+            port: DEVICE_PORT,
+            real_time_active: realTimeListenersActive
+        },
+        external_api: EXTERNAL_API_CONFIG,
+        rush_handling: {
+            enabled: RUSH_HANDLING_CONFIG.enabled,
+            queue_length: pushQueue.length,
+            concurrent_pushes: concurrentPushCount,
+            stats: rushHandlingStats
+        },
+        polling: {
+            enabled: POLLING_CONFIG.enabled,
+            last_polled: lastPolledTimestamp,
+            interval: POLLING_CONFIG.interval
+        },
+        data: { users: usersCache.length, attendance: attendanceHistory.length }
+    };
+    res.json(diagnostic);
+});
+
+// Test Auto Push
+app.post('/api/test-auto-push', (req, res) => {
+    const { userId, userName } = req.body;
+    
+    const testRecord = {
+        id: `test-${Date.now()}`,
+        userId: userId || '250050',
+        userName: userName || 'Test User',
+        timestamp: new Date().toISOString(),
+        punchType: 'Check-in',
+        verificationMethod: 'Fingerprint',
+        deviceIp: DEVICE_IP
+    };
+    
+    console.log('\n🧪 [TEST AUTO PUSH] Simulating real-time punch:');
+    console.log('   Record:', JSON.stringify(testRecord, null, 2));
+    
+    // Process the test record
+    processAttendanceRecord(testRecord);
+    
+    res.json({
+        success: true,
+        message: 'Test record queued for auto push',
+        record: testRecord,
+        queue_length: pushQueue.length
+    });
+});
+
+// Handle preflight requests
+app.options('*', cors());
+
+// ===== SOCKET.IO HANDLERS =====
+io.on('connection', (socket) => {
+    console.log('🔌 Client connected');
+    
+    socket.emit('users_data', usersCache);
+    socket.emit('attendance_history', attendanceHistory);
+    socket.emit('push_statistics', pushStatistics);
+    
+    if (deviceInstance) {
+        deviceInstance.getInfo()
+            .then(info => socket.emit('device_info', info))
+            .catch(error => console.error('Error getting device info:', error));
+    }
+
+    socket.on('disconnect', () => {
+        console.log('🔌 Client disconnected');
+    });
+});
 
 // ===== DEVICE INITIALIZATION =====
 async function initializeDevice() {
     try {
         if (connectionAttempts >= MAX_RETRIES) {
-            console.log('Max connection attempts reached. Waiting 1 minute before trying again...');
+            console.log('Max connection attempts reached. Waiting 1 minute...');
             connectionAttempts = 0;
             setTimeout(initializeDevice, 60000);
             return;
@@ -721,92 +880,105 @@ async function initializeDevice() {
         ]);
 
         console.log(`✅ Connected to device at ${DEVICE_IP}:${DEVICE_PORT}`);
-        console.log(`🔗 External API: ${EXTERNAL_API_CONFIG.enabled ? 'ENABLED' : 'DISABLED'}`);
+        console.log(`🌐 External API: ${EXTERNAL_API_CONFIG.enabled ? 'ENABLED' : 'DISABLED'}`);
+        console.log(`🚀 Rush Handling: ${RUSH_HANDLING_CONFIG.enabled ? 'ENABLED' : 'DISABLED'}`);
+        console.log(`🔍 Polling: ${POLLING_CONFIG.enabled ? 'ENABLED' : 'DISABLED'}`);
 
-        const deviceInfo = await deviceInstance.getInfo();
-        console.log('Device Info:', deviceInfo);
-
-        const users = await deviceInstance.getUsers();
-        if (users && typeof users === 'object' && !Array.isArray(users)) {
-            usersCache = Object.values(users).find(val => Array.isArray(val)) || [];
-        } else {
-            usersCache = Array.isArray(users) ? users : [];
-        }
-        console.log('Total users on device:', usersCache.length);
-
+        // Get device info
         try {
-            const attendance = await deviceInstance.getAttendances();
-            if (attendance && Array.isArray(attendance)) {
-                attendanceHistory = attendance.map((log, index) => {
-                    const timestamp = parseZktecoTime(log.record_time);
-                    const userId = log.user_id || log.userId || 'Unknown';
-                    return {
-                        id: `att-${timestamp.getTime()}-${index}`,
-                        userId: userId,
-                        userName: findUserName(userId),
-                        timestamp: timestamp.toISOString(),
-                        date: timestamp.toLocaleDateString(),
-                        time: timestamp.toLocaleTimeString(),
-                        verificationMethod: determineVerificationMethod(log),
-                        punchType: determinePunchType(log),
-                        deviceIp: DEVICE_IP,
-                        rawData: log
-                    };
-                }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-                console.log('Loaded initial attendance records:', attendanceHistory.length);
-            }
+            const deviceInfo = await deviceInstance.getInfo();
+            console.log('Device Info:', deviceInfo);
         } catch (error) {
-            console.error('Error loading initial attendance:', error);
+            console.error('Error getting device info:', error);
         }
 
+        // Get users
+        try {
+            const users = await deviceInstance.getUsers();
+            if (users && typeof users === 'object' && !Array.isArray(users)) {
+                usersCache = Object.values(users).find(val => Array.isArray(val)) || [];
+            } else {
+                usersCache = Array.isArray(users) ? users : [];
+            }
+            console.log('Total users on device:', usersCache.length);
+        } catch (error) {
+            console.error('Error loading users:', error);
+        }
+
+        // Set up real-time monitoring
         try {
             await deviceInstance.getRealTimeLogs((realTimeLog) => {
+                console.log('\n🔔 ===== REAL-TIME PUNCH DETECTED FROM DEVICE =====');
+                realTimeListenersActive = true;
                 processAndBroadcastAttendance(realTimeLog);
             });
             console.log('👂 Listening for real-time attendance data...');
+            realTimeListenersActive = true;
         } catch (error) {
-            console.error('Failed to setup real-time monitoring:', error.message);
+            console.error('❌ Failed to setup real-time monitoring:', error.message);
+            realTimeListenersActive = false;
+        }
+
+        // Set up polling as fallback
+        if (POLLING_CONFIG.enabled) {
+            console.log(`🔍 Setting up polling every ${POLLING_CONFIG.interval}ms`);
+            setInterval(pollForNewAttendances, POLLING_CONFIG.interval);
+            
+            // Do initial poll
+            setTimeout(() => {
+                pollForNewAttendances();
+            }, 2000);
         }
 
         connectionAttempts = 0;
         io.emit('device_connection', { 
             status: 'connected', 
             message: 'Device connected successfully',
-            external_api: EXTERNAL_API_CONFIG.enabled
+            real_time_active: realTimeListenersActive,
+            polling_active: POLLING_CONFIG.enabled
         });
 
     } catch (error) {
-        console.error('Failed to connect to device:', error.message);
+        console.error('❌ Failed to connect to device:', error.message);
         if (deviceInstance) {
             deviceInstance.disconnect();
             deviceInstance = null;
         }
         connectionAttempts++;
+        
         io.emit('device_connection', { 
             status: 'disconnected', 
             message: `Connection attempt ${connectionAttempts}/${MAX_RETRIES} failed` 
         });
-        console.log(`Connection attempt ${connectionAttempts}/${MAX_RETRIES}. Retrying in 5 seconds...`);
+        
+        console.log(`Retrying in 5 seconds... (${connectionAttempts}/${MAX_RETRIES})`);
         setTimeout(initializeDevice, 5000);
     }
 }
 
 // ===== SERVER STARTUP =====
 server.listen(EXPRESS_PORT, () => {
-    console.log(`🚀 HR Management System running on port ${EXPRESS_PORT}`);
+    console.log(`🚀 HR System running on port ${EXPRESS_PORT}`);
     console.log(`📱 Dashboard: http://localhost:${EXPRESS_PORT}`);
     console.log(`🔗 Device: ${DEVICE_IP}:${DEVICE_PORT}`);
     console.log(`🌐 External API: ${EXTERNAL_API_CONFIG.enabled ? 'ENABLED' : 'DISABLED'}`);
-    console.log(`📊 API Documentation available via Postman collection`);
+    console.log(`🚀 Auto Push: ${EXTERNAL_API_CONFIG.enabled ? 'ACTIVE' : 'INACTIVE'}`);
+    console.log(`🔍 Polling: ${POLLING_CONFIG.enabled ? 'ACTIVE' : 'INACTIVE'}`);
+    console.log(`📊 Test Auto Push: POST http://localhost:${EXPRESS_PORT}/api/test-auto-push`);
+    console.log(`🔍 Manual Poll: POST http://localhost:${EXPRESS_PORT}/api/poll-now`);
+    console.log(`🐛 Debug Endpoints:`);
+    console.log(`   - POST http://localhost:${EXPRESS_PORT}/api/debug-push-payload`);
+    console.log(`   - POST http://localhost:${EXPRESS_PORT}/api/test-external-api`);
     initializeDevice();
 });
 
 // Graceful shutdown
 process.on('SIGINT', () => {
     console.log('\n🛑 Shutting down server...');
+    isProcessingQueue = false;
     if (deviceInstance) {
         deviceInstance.disconnect();
-        console.log('📴 Disconnected from ZKTeco device');
+        console.log('📴 Disconnected from device');
     }
     server.close(() => {
         console.log('✅ Server closed');
