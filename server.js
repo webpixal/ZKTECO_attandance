@@ -3,6 +3,7 @@ import http from 'http';
 import { Server } from 'socket.io';
 import Zkteco from 'zkteco-js';
 import cors from 'cors';
+import { EventEmitter } from 'events';
 
 const app = express();
 const server = http.createServer(app);
@@ -24,7 +25,7 @@ const io = new Server(server, {
 const EXPRESS_PORT = process.env.EXPRESS_PORT || 3000;
 const DEVICE_IP = '118.179.40.236';
 const DEVICE_PORT = 4370;
-const CONNECTION_TIMEOUT = 5000;
+const CONNECTION_TIMEOUT = 10000; // Increased timeout for VPS
 const MAX_RETRIES = 5;
 
 // ===== SIMPLIFIED RUSH HANDLING CONFIGURATION =====
@@ -50,9 +51,9 @@ const EXTERNAL_API_CONFIG = {
 
 // ===== POLLING CONFIGURATION =====
 const POLLING_CONFIG = {
-    enabled: true, // Enable polling as fallback
-    interval: 3000, // Poll every 3 seconds
-    maxRecordsPerPoll: 10 // Get last 10 records each poll
+    enabled: true,
+    interval: 5000, // Increased to 5 seconds for VPS stability
+    maxRecordsPerPoll: 10
 };
 
 // ===== SIMPLIFIED RUSH HANDLING =====
@@ -81,8 +82,10 @@ let deviceInstance;
 let connectionAttempts = 0;
 let usersCache = [];
 let attendanceHistory = [];
-let lastPolledTimestamp = new Date(); // Track last poll time
+let lastPolledTimestamp = new Date();
 let realTimeListenersActive = false;
+let isPollingInProgress = false; // Prevent overlapping polls
+let pollingInterval;
 
 // Middleware
 app.use(express.json());
@@ -407,16 +410,42 @@ async function pushToExternalAPI(attendanceData, retryCount = 0) {
     }
 }
 
-// ===== POLLING MECHANISM =====
+// ===== ENHANCED POLLING MECHANISM WITH ERROR HANDLING =====
 async function pollForNewAttendances() {
-    if (!deviceInstance || !POLLING_CONFIG.enabled) {
+    if (!deviceInstance || !POLLING_CONFIG.enabled || isPollingInProgress) {
+        if (isPollingInProgress) {
+            console.log('⏳ [POLLING] Previous poll still in progress, skipping...');
+        }
         return;
     }
 
+    isPollingInProgress = true;
+    
     try {
         console.log(`\n🔍 [POLLING] Checking for new attendance records...`);
         
-        let deviceLogs = await deviceInstance.getAttendances();
+        // Add timeout to prevent hanging
+        const pollPromise = deviceInstance.getAttendances();
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Polling timeout')), 10000)
+        );
+
+        let deviceLogs;
+        try {
+            deviceLogs = await Promise.race([pollPromise, timeoutPromise]);
+        } catch (pollError) {
+            console.error('❌ [POLLING] Error getting attendance records:', pollError.message);
+            
+            // Handle specific ZKTeco errors
+            if (pollError.message.includes('ERROR_IN_UNHANDLE_CMD') || 
+                pollError.message.includes('UNKNOWN ERROR')) {
+                console.log('🔄 [POLLING] Device communication error, attempting to reconnect...');
+                await reinitializeDeviceConnection();
+                return;
+            }
+            throw pollError;
+        }
+
         if (!Array.isArray(deviceLogs)) {
             deviceLogs = Object.values(deviceLogs).find(val => Array.isArray(val)) || [];
         }
@@ -468,7 +497,41 @@ async function pollForNewAttendances() {
 
     } catch (error) {
         console.error('❌ [POLLING ERROR] Failed to poll attendance data:', error.message);
+        
+        // If device connection is lost, attempt to reconnect
+        if (error.message.includes('timeout') || 
+            error.message.includes('socket') || 
+            error.message.includes('connection')) {
+            console.log('🔄 [POLLING] Device connection issue detected, attempting to reconnect...');
+            await reinitializeDeviceConnection();
+        }
+    } finally {
+        isPollingInProgress = false;
     }
+}
+
+// ===== DEVICE RECONNECTION HANDLER =====
+async function reinitializeDeviceConnection() {
+    console.log('🔄 Attempting to reinitialize device connection...');
+    
+    if (deviceInstance) {
+        try {
+            deviceInstance.disconnect();
+            console.log('📴 Disconnected from device');
+        } catch (error) {
+            console.log('⚠️ Error during device disconnect:', error.message);
+        }
+        deviceInstance = null;
+    }
+    
+    // Reset connection attempts to allow reconnection
+    connectionAttempts = 0;
+    
+    // Reinitialize after a short delay
+    setTimeout(() => {
+        console.log('🔄 Reinitializing device connection...');
+        initializeDevice();
+    }, 5000);
 }
 
 // ===== ATTENDANCE PROCESSING =====
@@ -630,6 +693,7 @@ app.get('/api/device-info', async (_req, res) => {
             'Connection Status': 'Connected',
             'Real-time Monitoring': realTimeListenersActive ? 'Active' : 'Inactive',
             'Polling': POLLING_CONFIG.enabled ? 'Active' : 'Inactive',
+            'Polling Status': isPollingInProgress ? 'In Progress' : 'Idle',
             'External API': EXTERNAL_API_CONFIG.enabled ? 'Enabled' : 'Disabled',
             'Rush Handling': RUSH_HANDLING_CONFIG.enabled ? 'Enabled' : 'Disabled',
             'Queue Status': `${pushQueue.length} items waiting`
@@ -652,7 +716,8 @@ app.get('/api/users', async (_req, res) => {
         usersCache = users;
         res.status(200).json(users);
     } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch users from device' });
+        console.error('Error fetching users:', error.message);
+        res.status(500).json({ error: 'Failed to fetch users from device: ' + error.message });
     }
 });
 
@@ -693,7 +758,8 @@ app.get('/api/attendance', async (req, res) => {
             lastUpdated: new Date().toISOString()
         });
     } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch attendance data' });
+        console.error('Error fetching attendance:', error.message);
+        res.status(500).json({ error: 'Failed to fetch attendance data: ' + error.message });
     }
 });
 
@@ -760,10 +826,27 @@ app.post('/api/poll-now', async (_req, res) => {
             success: true,
             message: 'Polling completed',
             queue_length: pushQueue.length,
-            last_polled: lastPolledTimestamp
+            last_polled: lastPolledTimestamp,
+            is_polling_in_progress: isPollingInProgress
         });
     } catch (error) {
         console.error('❌ Manual poll failed:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Reinitialize Device Connection
+app.post('/api/reinitialize-device', async (_req, res) => {
+    try {
+        console.log('\n🔄 [MANUAL REINITIALIZE] Manual device reinitialization triggered');
+        await reinitializeDeviceConnection();
+        res.json({
+            success: true,
+            message: 'Device reinitialization triggered',
+            reinitializing: true
+        });
+    } catch (error) {
+        console.error('❌ Manual reinitialize failed:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -777,7 +860,8 @@ app.get('/api/push-statistics', (_req, res) => {
         polling: {
             enabled: POLLING_CONFIG.enabled,
             last_polled: lastPolledTimestamp,
-            interval: POLLING_CONFIG.interval
+            interval: POLLING_CONFIG.interval,
+            is_in_progress: isPollingInProgress
         }
     });
 });
@@ -785,12 +869,19 @@ app.get('/api/push-statistics', (_req, res) => {
 // Diagnostic
 app.get('/api/diagnostic', async (_req, res) => {
     const diagnostic = {
-        server: { status: 'running', port: EXPRESS_PORT, uptime: process.uptime() },
+        server: { 
+            status: 'running', 
+            port: EXPRESS_PORT, 
+            uptime: process.uptime(),
+            node_version: process.version,
+            platform: process.platform
+        },
         device: { 
             connected: !!deviceInstance, 
             ip: DEVICE_IP, 
             port: DEVICE_PORT,
-            real_time_active: realTimeListenersActive
+            real_time_active: realTimeListenersActive,
+            connection_attempts: connectionAttempts
         },
         external_api: EXTERNAL_API_CONFIG,
         rush_handling: {
@@ -802,9 +893,13 @@ app.get('/api/diagnostic', async (_req, res) => {
         polling: {
             enabled: POLLING_CONFIG.enabled,
             last_polled: lastPolledTimestamp,
-            interval: POLLING_CONFIG.interval
+            interval: POLLING_CONFIG.interval,
+            is_in_progress: isPollingInProgress
         },
-        data: { users: usersCache.length, attendance: attendanceHistory.length }
+        data: { 
+            users: usersCache.length, 
+            attendance: attendanceHistory.length 
+        }
     };
     res.json(diagnostic);
 });
@@ -859,7 +954,7 @@ io.on('connection', (socket) => {
     });
 });
 
-// ===== DEVICE INITIALIZATION =====
+// ===== ENHANCED DEVICE INITIALIZATION =====
 async function initializeDevice() {
     try {
         if (connectionAttempts >= MAX_RETRIES) {
@@ -869,7 +964,7 @@ async function initializeDevice() {
             return;
         }
 
-        console.log('Attempting to connect to device...');
+        console.log(`🔌 Attempting to connect to device at ${DEVICE_IP}:${DEVICE_PORT}...`);
         deviceInstance = new Zkteco(DEVICE_IP, DEVICE_PORT, CONNECTION_TIMEOUT);
         
         await Promise.race([
@@ -887,9 +982,9 @@ async function initializeDevice() {
         // Get device info
         try {
             const deviceInfo = await deviceInstance.getInfo();
-            console.log('Device Info:', deviceInfo);
+            console.log('📊 Device Info:', deviceInfo);
         } catch (error) {
-            console.error('Error getting device info:', error);
+            console.error('❌ Error getting device info:', error.message);
         }
 
         // Get users
@@ -900,9 +995,9 @@ async function initializeDevice() {
             } else {
                 usersCache = Array.isArray(users) ? users : [];
             }
-            console.log('Total users on device:', usersCache.length);
+            console.log(`👥 Total users on device: ${usersCache.length}`);
         } catch (error) {
-            console.error('Error loading users:', error);
+            console.error('❌ Error loading users:', error.message);
         }
 
         // Set up real-time monitoring
@@ -917,17 +1012,32 @@ async function initializeDevice() {
         } catch (error) {
             console.error('❌ Failed to setup real-time monitoring:', error.message);
             realTimeListenersActive = false;
+            console.log('⚠️ Real-time monitoring disabled, relying on polling only');
         }
 
         // Set up polling as fallback
         if (POLLING_CONFIG.enabled) {
             console.log(`🔍 Setting up polling every ${POLLING_CONFIG.interval}ms`);
-            setInterval(pollForNewAttendances, POLLING_CONFIG.interval);
             
-            // Do initial poll
+            // Clear any existing interval
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+            }
+            
+            // Set up new polling interval
+            pollingInterval = setInterval(async () => {
+                try {
+                    await pollForNewAttendances();
+                } catch (error) {
+                    console.error('❌ Polling interval error:', error.message);
+                }
+            }, POLLING_CONFIG.interval);
+            
+            // Do initial poll after a delay
             setTimeout(() => {
+                console.log('🔍 Performing initial poll...');
                 pollForNewAttendances();
-            }, 2000);
+            }, 3000);
         }
 
         connectionAttempts = 0;
@@ -941,18 +1051,23 @@ async function initializeDevice() {
     } catch (error) {
         console.error('❌ Failed to connect to device:', error.message);
         if (deviceInstance) {
-            deviceInstance.disconnect();
+            try {
+                deviceInstance.disconnect();
+            } catch (disconnectError) {
+                console.log('⚠️ Error during device disconnect:', disconnectError.message);
+            }
             deviceInstance = null;
         }
         connectionAttempts++;
         
         io.emit('device_connection', { 
             status: 'disconnected', 
-            message: `Connection attempt ${connectionAttempts}/${MAX_RETRIES} failed` 
+            message: `Connection attempt ${connectionAttempts}/${MAX_RETRIES} failed: ${error.message}` 
         });
         
-        console.log(`Retrying in 5 seconds... (${connectionAttempts}/${MAX_RETRIES})`);
-        setTimeout(initializeDevice, 5000);
+        const retryDelay = Math.min(5000 * connectionAttempts, 30000); // Exponential backoff max 30s
+        console.log(`Retrying in ${retryDelay/1000} seconds... (${connectionAttempts}/${MAX_RETRIES})`);
+        setTimeout(initializeDevice, retryDelay);
     }
 }
 
@@ -966,9 +1081,15 @@ server.listen(EXPRESS_PORT, () => {
     console.log(`🔍 Polling: ${POLLING_CONFIG.enabled ? 'ACTIVE' : 'INACTIVE'}`);
     console.log(`📊 Test Auto Push: POST http://localhost:${EXPRESS_PORT}/api/test-auto-push`);
     console.log(`🔍 Manual Poll: POST http://localhost:${EXPRESS_PORT}/api/poll-now`);
+    console.log(`🔄 Reinitialize Device: POST http://localhost:${EXPRESS_PORT}/api/reinitialize-device`);
     console.log(`🐛 Debug Endpoints:`);
     console.log(`   - POST http://localhost:${EXPRESS_PORT}/api/debug-push-payload`);
     console.log(`   - POST http://localhost:${EXPRESS_PORT}/api/test-external-api`);
+    
+    // Increase max listeners to prevent warnings (ES modules compatible)
+    EventEmitter.defaultMaxListeners = 20;
+    process.setMaxListeners(20);
+    
     initializeDevice();
 });
 
@@ -976,12 +1097,32 @@ server.listen(EXPRESS_PORT, () => {
 process.on('SIGINT', () => {
     console.log('\n🛑 Shutting down server...');
     isProcessingQueue = false;
-    if (deviceInstance) {
-        deviceInstance.disconnect();
-        console.log('📴 Disconnected from device');
+    
+    // Clear polling interval
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
     }
+    
+    if (deviceInstance) {
+        try {
+            deviceInstance.disconnect();
+            console.log('📴 Disconnected from device');
+        } catch (error) {
+            console.log('⚠️ Error during device disconnect:', error.message);
+        }
+    }
+    
     server.close(() => {
         console.log('✅ Server closed');
         process.exit(0);
     });
-}); 
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+    console.error('🚨 Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('🚨 Unhandled Rejection at:', promise, 'reason:', reason);
+});
